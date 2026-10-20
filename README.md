@@ -1,4 +1,4 @@
-# swingbot
+# Swingbot
 
 A day-trading bot for Public.com or Alpaca (stocks) or NinjaTrader (futures) that you run on your own computer. Each morning it scans your watchlist, picks one stock, and trades it long-only on 5-minute bars. It uses swing-point trend lines and is always out of the market by the close.
 
