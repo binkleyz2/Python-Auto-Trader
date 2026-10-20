@@ -1,0 +1,224 @@
+[
+ {
+  "date": "2026-06-04",
+  "symbol": "AAT",
+  "setup": "near resistance",
+  "detail": "0.33 ATR below falling resistance, 2 extra touches"
+ },
+ {
+  "date": "2026-06-05",
+  "symbol": "BFC",
+  "setup": "near resistance",
+  "detail": "0.21 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-06-08",
+  "symbol": "ABM",
+  "setup": "near resistance",
+  "detail": "0.26 ATR below falling resistance, 2 extra touches"
+ },
+ {
+  "date": "2026-06-09",
+  "symbol": "UUUU",
+  "setup": "near support",
+  "detail": "0.02 ATR above rising support, 1 extra touches"
+ },
+ {
+  "date": "2026-06-10",
+  "symbol": "ASYS",
+  "setup": "near support",
+  "detail": "0.21 ATR above rising support, 1 extra touches"
+ },
+ {
+  "date": "2026-06-11",
+  "symbol": "KE",
+  "setup": "near support",
+  "detail": "0.18 ATR above rising support, 1 extra touches"
+ },
+ {
+  "date": "2026-06-12",
+  "symbol": "CORZ",
+  "setup": "near support",
+  "detail": "0.93 ATR above rising support, 12 extra touches"
+ },
+ {
+  "date": "2026-06-15",
+  "symbol": "ASYS",
+  "setup": "near support",
+  "detail": "0.16 ATR above rising support, 1 extra touches"
+ },
+ {
+  "date": "2026-06-16",
+  "symbol": "KRNY",
+  "setup": "near resistance",
+  "detail": "0.43 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-06-17",
+  "symbol": "BNAI",
+  "setup": "near support",
+  "detail": "0.03 ATR above rising support, 3 extra touches"
+ },
+ {
+  "date": "2026-06-18",
+  "symbol": "BH.A",
+  "setup": "near resistance",
+  "detail": "0.39 ATR below falling resistance, 6 extra touches"
+ },
+ {
+  "date": "2026-06-19",
+  "symbol": "AIR",
+  "setup": "near resistance",
+  "detail": "0.22 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-06-22",
+  "symbol": "NUS",
+  "setup": "near resistance",
+  "detail": "0.15 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-06-23",
+  "symbol": "AWR",
+  "setup": "near resistance",
+  "detail": "0.22 ATR below falling resistance, 4 extra touches"
+ },
+ {
+  "date": "2026-06-24",
+  "symbol": "CMTV",
+  "setup": "near resistance",
+  "detail": "0.08 ATR below falling resistance, 0 extra touches"
+ },
+ {
+  "date": "2026-06-25",
+  "symbol": "FC",
+  "setup": "near support",
+  "detail": "0.02 ATR above rising support, 5 extra touches"
+ },
+ {
+  "date": "2026-06-26",
+  "symbol": "CAC",
+  "setup": "near resistance",
+  "detail": "0.22 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-06-29",
+  "symbol": "AEBI",
+  "setup": "near resistance",
+  "detail": "0.54 ATR below falling resistance, 5 extra touches"
+ },
+ {
+  "date": "2026-06-30",
+  "symbol": "BATRA",
+  "setup": "near resistance",
+  "detail": "0.22 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-07-01",
+  "symbol": "SKYW",
+  "setup": "near support",
+  "detail": "0.60 ATR above rising support, 6 extra touches"
+ },
+ {
+  "date": "2026-07-02",
+  "symbol": "ANAB",
+  "setup": "near resistance",
+  "detail": "0.88 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-07-03",
+  "symbol": "WLY",
+  "setup": "near resistance",
+  "detail": "0.24 ATR below falling resistance, 2 extra touches"
+ },
+ {
+  "date": "2026-07-06",
+  "symbol": "BZH",
+  "setup": "near resistance",
+  "detail": "0.20 ATR below falling resistance, 1 extra touches"
+ },
+ {
+  "date": "2026-07-07",
+  "symbol": "AMPH",
+  "setup": "near resistance",
+  "detail": "0.08 ATR below falling resistance, 1 extra touches"
+ },
+ {
+  "date": "2026-07-08",
+  "symbol": "GLIBA",
+  "setup": "near resistance",
+  "detail": "0.05 ATR below falling resistance, 2 extra touches"
+ },
+ {
+  "date": "2026-07-09",
+  "symbol": "BNED",
+  "setup": "near support",
+  "detail": "0.27 ATR above rising support, 0 extra touches"
+ },
+ {
+  "date": "2026-07-10",
+  "symbol": "ADNT",
+  "setup": "near support",
+  "detail": "0.15 ATR above rising support, 2 extra touches"
+ },
+ {
+  "date": "2026-07-13",
+  "symbol": "FLYW",
+  "setup": "near resistance",
+  "detail": "0.33 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-07-14",
+  "symbol": "AEHR",
+  "setup": "near resistance",
+  "detail": "0.24 ATR below falling resistance, 4 extra touches"
+ },
+ {
+  "date": "2026-07-15",
+  "symbol": "CWT",
+  "setup": "near resistance",
+  "detail": "0.43 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-07-16",
+  "symbol": "CWST",
+  "setup": "near support",
+  "detail": "0.46 ATR above rising support, 3 extra touches"
+ },
+ {
+  "date": "2026-07-17",
+  "symbol": "GTY",
+  "setup": "near support",
+  "detail": "0.16 ATR above rising support, 4 extra touches"
+ },
+ {
+  "date": "2026-07-20",
+  "symbol": "BV",
+  "setup": "near resistance",
+  "detail": "0.62 ATR below falling resistance, 2 extra touches"
+ },
+ {
+  "date": "2026-07-21",
+  "symbol": "SENEA",
+  "setup": "near resistance",
+  "detail": "0.25 ATR below falling resistance, 2 extra touches"
+ },
+ {
+  "date": "2026-07-22",
+  "symbol": "KE",
+  "setup": "near resistance",
+  "detail": "0.60 ATR below falling resistance, 3 extra touches"
+ },
+ {
+  "date": "2026-07-23",
+  "symbol": "BZH",
+  "setup": "near support",
+  "detail": "0.18 ATR above rising support, 5 extra touches"
+ },
+ {
+  "date": "2026-07-24",
+  "symbol": "BCC",
+  "setup": "near resistance",
+  "detail": "0.06 ATR below falling resistance, 0 extra touches"
+ }
+]

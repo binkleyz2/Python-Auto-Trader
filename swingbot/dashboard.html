@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>swingbot</title>
+<!--SNAPSHOT--><!--CONTROL-->
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --entry: #2a78d6; --support: #1baf7a; --resist: #eb6834;
+    --stop: #d03b3b; --good: #0ca30c; --good-text: #006300; --bad-text: #b42d2d; --warn: #fab219;
+    --risk-wash: rgba(208,59,59,0.08); --gain-wash: rgba(12,163,12,0.09);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --entry: #3987e5; --support: #199e70; --resist: #d95926;
+      --good-text: #0ca30c; --bad-text: #e66767;
+      --risk-wash: rgba(208,59,59,0.14); --gain-wash: rgba(12,163,12,0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { overflow-x: hidden; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
+  #pick { min-width: 0; overflow-wrap: anywhere; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; margin-bottom: 14px; }
+  h1 { font-size: 28px; margin: 0; letter-spacing: -0.01em; }
+  .pick { color: var(--ink-2); }
+  .spacer { flex: 1; }
+  .badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+           border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap; }
+  .badge.live { background: var(--stop); color: #fff; border-color: transparent; }
+  .badge.dry { background: var(--surface); }
+  .updated { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .banner { display: none; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+  .banner.show { display: block; }
+  .banner::before { content: "⚠ "; color: var(--warn); }
+  .banner.info::before { content: "ⓘ "; color: var(--entry); }
+  .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 900px) { .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .tile { padding: 10px 12px; min-width: 0; }
+  .tile .k { font-size: 12px; color: var(--ink-2); }
+  .tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .s { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .up { color: var(--good-text); } .down { color: var(--bad-text); }
+  .card { padding: 12px 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; margin: 0 0 8px; font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .key { display: inline-block; width: 16px; height: 0; border-top: 2px solid; }
+  .key.dash { border-top-style: dashed; }
+  .key.candle { width: 7px; height: 12px; border: 1px solid var(--ink-2); border-top-width: 1px; }
+  #chartwrap { position: relative; }
+  svg { display: block; width: 100%; height: 400px; }
+  .empty { fill: var(--muted); font-size: 13px; }
+  #tip { position: absolute; pointer-events: none; display: none; background: var(--surface);
+         border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+         box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 150px; font-variant-numeric: tabular-nums; }
+  #tip .row { display: flex; justify-content: space-between; gap: 14px; }
+  #tip .row b { font-weight: 600; }
+  #tip .lab { color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  td.num, th.num { text-align: right; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  .grid2 > * { min-width: 0; }
+  .log { font: 12px/1.5 ui-monospace, Consolas, monospace; max-height: 260px; overflow: auto; }
+  .log div { white-space: pre-wrap; word-break: break-word; }
+  .log .t { color: var(--muted); }
+  .log .WARNING, .log .ERROR { color: var(--bad-text); }
+  .none { color: var(--muted); font-size: 13px; }
+  .tf { display: inline-flex; align-items: center; gap: 6px; }
+  .tf select { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface);
+               border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; }
+  .tf select:disabled { color: var(--muted); }
+  .tf .note { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="sym">swingbot</h1>
+    <span class="pick" id="pick"></span>
+    <span class="spacer"></span>
+    <span class="badge" id="mode">–</span>
+    <span class="badge" id="state">connecting…</span>
+    <span class="updated" id="updated"></span>
+  </header>
+  <div class="banner" id="banner"></div>
+
+  <section class="tiles">
+    <div class="tile"><div class="k">Position</div><div class="v" id="t-pos">–</div><div class="s" id="t-pos-s"></div></div>
+    <div class="tile"><div class="k">Last price</div><div class="v" id="t-last">–</div><div class="s" id="t-last-s"></div></div>
+    <div class="tile"><div class="k">Open P&amp;L</div><div class="v" id="t-open">–</div><div class="s" id="t-open-s"></div></div>
+    <div class="tile"><div class="k">Stop</div><div class="v" id="t-stop">–</div><div class="s" id="t-stop-s"></div></div>
+    <div class="tile"><div class="k">Day P&amp;L</div><div class="v" id="t-day">–</div><div class="s" id="t-day-s"></div></div>
+    <div class="tile"><div class="k">Trades today</div><div class="v" id="t-trades">–</div><div class="s" id="t-trades-s"></div></div>
+  </section>
+
+  <section class="card">
+    <div class="legend">
+      <span class="tf"><i class="key candle"></i><span id="barlabel">5-min bars</span>
+        <select id="tf" hidden aria-label="Bar size the bot trades on"></select><span class="note" id="tfnote"></span></span>
+      <span><i class="key" style="border-color:var(--support)"></i>Support (rising)</span>
+      <span><i class="key" style="border-color:var(--resist)"></i>Resistance (falling)</span>
+      <span><i class="key" style="border-color:var(--entry)"></i>Entry</span>
+      <span><i class="key" style="border-color:var(--stop)"></i>Stop (trails up)</span>
+      <span><i class="key dash" style="border-color:var(--muted)"></i>Initial stop</span>
+      <span class="spacer"></span>
+      <span class="tf">Show <select id="days" aria-label="Days shown on the chart">
+        <option value="1">Today</option><option value="2">2 days</option><option value="5">5 days</option>
+      </select></span>
+    </div>
+    <div id="chartwrap">
+      <svg id="chart" role="img" aria-label="Today's price bars with trend lines, entry and stop"></svg>
+      <div id="tip"></div>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Trades today</h2>
+      <div id="trades"></div>
+    </section>
+    <section class="card">
+      <h2>Activity</h2>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Morning scan</h2>
+    <div id="scan"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const SNAP = window.__STATUS__ || null;
+const NS = "http://www.w3.org/2000/svg";
+let BARS_PER_DAY = 78;                   // 09:30-16:00 in bars; set from the bot's bar size
+// Days shown on the chart (display only - the bot uses the same history whatever is shown here)
+let VIEW_DAYS = 1;
+try { VIEW_DAYS = Number(localStorage.getItem("swingbot.days")) || 1; } catch (e) {}
+let S = null, lastOk = 0, failing = false;
+
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 2) => (v == null || isNaN(v)) ? "–" : Number(v).toFixed(d);
+const money = v => (v == null || isNaN(v)) ? "–" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const signed = v => (v == null || isNaN(v)) ? "–" : (v > 0 ? "+" : v < 0 ? "−" : "") + money(Math.abs(v)).replace("$", "$");
+function setText(id, text, cls) { const el = $(id); el.textContent = text; el.className = el.className.replace(/\b(up|down)\b/g, "").trim(); if (cls) el.classList.add(cls); }
+const tone = v => v > 0 ? "up" : v < 0 ? "down" : "";
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ------------------------------------------------------------------ header & tiles
+function renderTop(s) {
+  $("sym").textContent = s.symbol || "No pick";
+  $("pick").textContent = s.pick_reason || "";
+  const m = $("mode");
+  m.textContent = s.mode || "–";
+  m.className = "badge " + (s.mode === "LIVE" ? "live" : "dry");
+  $("state").textContent = s.state || "";
+  $("updated").textContent = s.updated ? "Updated " + s.updated + " ET" : "";
+
+  const p = s.pos;
+  if (p) {
+    setText("t-pos", `${p.shares} ${s.unit || "sh"}`);
+    setText("t-pos-s", `${p.kind} · in at ${fmt(p.entry)} · ${p.entry_time}`);
+    const unreal = p.unreal, r = p.r;
+    setText("t-open", signed(unreal), tone(unreal));
+    setText("t-open-s", r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R  (1R = ${money(p.risk_dollars)})`);
+    setText("t-stop", fmt(p.stop));
+    const dist = s.last != null ? s.last - p.stop : null;
+    const locked = (p.stop - p.entry) * p.shares;
+    let sub = dist == null ? "" : `${fmt(dist)} below last`;
+    if (p.stop > p.init_stop) sub += locked >= 0 ? ` · locks ${signed(locked)}` : ` · raised ${p.stop_steps.length - 1}×`;
+    setText("t-stop-s", sub);
+  } else {
+    setText("t-pos", "Flat"); setText("t-pos-s", s.symbol ? "watching for a setup" : "");
+    setText("t-open", "–"); setText("t-open-s", "");
+    setText("t-stop", "–"); setText("t-stop-s", "");
+  }
+  setText("t-last", fmt(s.last));
+  setText("t-last-s", s.last_time ? "as of " + s.last_time + " ET" : "");
+  setText("t-day", signed(s.day_pnl), tone(s.day_pnl));
+  setText("t-day-s", s.mode === "LIVE" ? "realized + open" : "paper: realized + open");
+  setText("t-trades", `${s.trades_used ?? 0} of ${s.max_trades ?? "–"}`);
+  let ts = s.halted ? "daily loss limit hit – no new entries" : (s.spendable != null ? `settled cash left ${money(s.spendable)}` : "");
+  setText("t-trades-s", ts);
+  document.title = `${s.symbol || "swingbot"}${p ? " " + signed(p.unreal) : ""} · ${s.mode === "LIVE" ? "LIVE" : "dry run"}`;
+}
+
+// ------------------------------------------------------------------ chart
+function renderChart(s) {
+  const svg = $("chart");
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const W = svg.clientWidth || 900, H = 400;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const pad = {l: 12, r: 104, t: 14, b: 26};
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  const bm = s.bar_minutes || 5;
+  BARS_PER_DAY = 390 / bm;
+  renderBarPicker(s);
+  const days = s.days && s.days.length ? Math.min(VIEW_DAYS, s.days.length) : 1;
+  const XMIN = -(days - 1) * BARS_PER_DAY, TOTAL = days * BARS_PER_DAY;
+  const bars = (s.bars || []).filter(b => b.x >= XMIN);
+  const swingsV = (s.swings || []).filter(sw => sw.x >= XMIN);
+  const linesV = (s.lines || []).map(L => {             // clip a line that starts before the window
+    let [a, b2] = L.pts;
+    if (a[0] < XMIN && b2[0] > a[0]) a = [XMIN, a[1] + (b2[1] - a[1]) * (XMIN - a[0]) / (b2[0] - a[0])];
+    return Object.assign({}, L, {pts: [a, b2]});
+  });
+  const dayList = (s.days || []).filter(d => d.x >= XMIN);
+  if (!bars.length) {
+    el("text", {x: pad.l + pw / 2, y: H / 2, "text-anchor": "middle", class: "empty"}, svg)
+      .textContent = s.symbol ? "Waiting for today's first bars…" : "No stock picked yet.";
+    return;
+  }
+  const p = s.pos;
+  // y domain: the day's range plus every level on screen
+  let ys = [];
+  bars.forEach(b => ys.push(b.l, b.h));
+  linesV.forEach(L => L.pts.forEach(pt => ys.push(pt[1])));
+  if (p) ys.push(p.entry, p.stop, p.init_stop);
+  (s.trades || []).forEach(t => ys.push(t.entry, t.exit));
+  if (s.last != null) ys.push(s.last);
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  const span = Math.max(hi - lo, hi * 0.002);
+  lo -= span * 0.06; hi += span * 0.06;
+  const x = i => pad.l + (i - XMIN + 0.5) / TOTAL * pw;
+  const xEdge = i => pad.l + (i - XMIN) / TOTAL * pw;          // bar boundary (day starts, clock times)
+  const y = v => pad.t + (hi - v) / (hi - lo) * ph;
+
+  // grid + y ticks (right side)
+  const step = niceStep((hi - lo) / 5), ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    el("line", {x1: pad.l, x2: pad.l + pw, y1: y(v), y2: y(v), stroke: cssVar("--grid"), "stroke-width": 1}, svg);
+    const t = el("text", {x: pad.l + pw + 6, y: y(v) + 4, "font-size": 11, fill: cssVar("--muted")}, svg);
+    t.textContent = v.toFixed(step < 1 ? 2 : 0);
+    ticks.push([y(v), t]);
+  }
+  // time axis: hourly labels
+  el("line", {x1: pad.l, x2: pad.l + pw, y1: pad.t + ph, y2: pad.t + ph, stroke: cssVar("--axis")}, svg);
+  let lastLab = -1e9;
+  if (days === 1) {
+    // labels by minutes after 9:30, converted to bar positions
+    [[0, "9:30"], [30, "10:00"], [90, "11:00"], [150, "12:00"], [210, "1:00"], [270, "2:00"], [330, "3:00"], [390, "4:00"]].forEach(([m, lab]) => {
+      const lx = xEdge(m / bm);
+      if (lx - lastLab < 42 || (m === 330 && pad.l + pw - lx < 42)) return;     // keep labels from colliding
+      lastLab = lx;
+      const t = el("text", {x: lx, y: H - 8, "font-size": 11, fill: cssVar("--muted"), "text-anchor": m === 0 ? "start" : m === 390 ? "end" : "middle"}, svg);
+      t.textContent = lab;
+    });
+  } else {
+    // one label per session, plus a divider where each new day opens
+    dayList.forEach(d => {
+      const lx = xEdge(d.x), w = pw / days;
+      if (d.x > XMIN) el("line", {x1: lx, x2: lx, y1: pad.t, y2: pad.t + ph, stroke: cssVar("--grid"), "stroke-width": 1, "stroke-dasharray": "2 3"}, svg);
+      const t = el("text", {x: lx + w / 2, y: H - 8, "font-size": 11, fill: cssVar("--muted"), "text-anchor": "middle"}, svg);
+      t.textContent = d.back === 0 ? "Today" : (w < 60 ? d.label.split(" ")[1] : d.label);
+    });
+  }
+  // 15:50 sell-off marker (today)
+  const xs = xEdge(380 / bm);                                  // 3:50 PM
+  el("line", {x1: xs, x2: xs, y1: pad.t, y2: pad.t + ph, stroke: cssVar("--axis"), "stroke-width": 1}, svg);
+  const st = el("text", {x: xs - 4, y: pad.t + 10, "font-size": 11, fill: cssVar("--muted"), "text-anchor": "end"}, svg);
+  st.textContent = "3:50 sell-off";
+
+  // risk / locked-gain wash between entry and stop
+  if (p) {
+    const x0 = x(p.entry_x) - (pw / TOTAL) / 2, x1 = pad.l + pw;
+    const top = Math.max(p.entry, p.stop), bot = Math.min(p.entry, p.stop);
+    el("rect", {x: x0, y: y(top), width: Math.max(0, x1 - x0), height: Math.max(1, y(bot) - y(top)),
+                fill: p.stop > p.entry ? cssVar("--gain-wash") : cssVar("--risk-wash")}, svg);
+  }
+
+  // candles (neutral ink: price is context, the levels are the story)
+  const cw = Math.max(1, pw / TOTAL * 0.6), ink = cssVar("--ink-2");
+  bars.forEach(b => {
+    const cx = x(b.x);
+    el("line", {x1: cx, x2: cx, y1: y(b.h), y2: y(b.l), stroke: ink, "stroke-width": 1}, svg);
+    const up = b.c >= b.o, yt = y(Math.max(b.o, b.c)), hgt = Math.max(1, Math.abs(y(b.o) - y(b.c)));
+    el("rect", {x: cx - cw / 2, y: yt, width: cw, height: hgt, rx: 1,
+                fill: up ? cssVar("--surface") : ink, stroke: ink, "stroke-width": 1}, svg);
+  });
+
+  // confirmed swing points
+  swingsV.forEach(sw => {
+    const off = sw.kind === "low" ? 7 : -7;
+    el("circle", {cx: x(sw.x), cy: y(sw.y) + off, r: 2.5, fill: "none", stroke: cssVar("--muted"), "stroke-width": 1.2}, svg);
+  });
+
+  const labels = [];   // right-gutter direct labels: [y, text, color]
+  // trend lines
+  linesV.forEach(L => {
+    const c = cssVar(L.kind === "support" ? "--support" : "--resist");
+    const [a, b2] = L.pts;
+    el("line", {x1: x(a[0]), y1: y(a[1]), x2: x(b2[0]), y2: y(b2[1]), stroke: c, "stroke-width": 2, "stroke-linecap": "round"}, svg);
+    labels.push([y(b2[1]), `${L.kind === "support" ? "Support" : "Resist."} ${fmt(b2[1])}`, c]);
+  });
+
+  // closed trades: entry ▲ → exit ●, thin connector
+  (s.trades || []).forEach(t => {
+    const c = t.pnl >= 0 ? cssVar("--good") : cssVar("--stop");
+    el("line", {x1: x(t.entry_x), y1: y(t.entry), x2: x(t.exit_x), y2: y(t.exit), stroke: c, "stroke-width": 1.5, "stroke-dasharray": "3 3"}, svg);
+    tri(svg, x(t.entry_x), y(t.entry), cssVar("--entry"));
+    el("circle", {cx: x(t.exit_x), cy: y(t.exit), r: 4.5, fill: c, stroke: cssVar("--surface"), "stroke-width": 2}, svg);
+  });
+
+  // open position: entry, initial stop, trailing stop steps
+  if (p) {
+    const xe = x(p.entry_x), xr = pad.l + pw;
+    el("line", {x1: xe, x2: xr, y1: y(p.init_stop), y2: y(p.init_stop), stroke: cssVar("--muted"), "stroke-width": 1, "stroke-dasharray": "4 3"}, svg);
+    el("line", {x1: xe, x2: xr, y1: y(p.entry), y2: y(p.entry), stroke: cssVar("--entry"), "stroke-width": 1.5}, svg);
+    let d = "", steps = p.stop_steps || [[p.entry_x, p.stop]];
+    steps.forEach((st2, k) => {
+      const sx = x(st2[0]), sy = y(st2[1]);
+      if (k === 0) d += `M${sx},${sy}`; else d += `H${sx}V${sy}`;
+    });
+    d += `H${xr}`;
+    el("path", {d, fill: "none", stroke: cssVar("--stop"), "stroke-width": 2}, svg);
+    tri(svg, xe, y(p.entry), cssVar("--entry"));
+    labels.push([y(p.entry), `Entry ${fmt(p.entry)}`, cssVar("--entry")]);
+    labels.push([y(p.stop), `Stop ${fmt(p.stop)}`, cssVar("--stop")]);
+    if (p.stop > p.init_stop) labels.push([y(p.init_stop), `Init ${fmt(p.init_stop)}`, cssVar("--muted")]);
+  }
+  if (s.last != null) {
+    const lb = bars[bars.length - 1];
+    el("line", {x1: x(lb.x), x2: pad.l + pw, y1: y(s.last), y2: y(s.last), stroke: cssVar("--ink"), "stroke-width": 1, "stroke-dasharray": "1 3"}, svg);
+    labels.push([y(s.last), `Last ${fmt(s.last)}`, cssVar("--ink")]);
+  }
+  placeLabels(svg, labels, pad.l + pw + 6, pad.t, pad.t + ph);
+  // the direct labels win the gutter: drop any axis number they would overlap
+  ticks.forEach(([ty, t]) => { if (labels.some(L => Math.abs(L[0] - ty) < 12)) t.remove(); });
+
+  // hover: crosshair snapping to the nearest bar
+  const cross = el("line", {y1: pad.t, y2: pad.t + ph, stroke: cssVar("--muted"), "stroke-width": 1, visibility: "hidden"}, svg);
+  const hit = el("rect", {x: pad.l, y: pad.t, width: pw, height: ph, fill: "transparent"}, svg);
+  const tip = $("tip");
+  hit.addEventListener("pointermove", ev => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (W / r.width);
+    const i = (px - pad.l) / pw * TOTAL + XMIN - 0.5;
+    const b = bars.reduce((best, bb) => Math.abs(bb.x - i) < Math.abs(best.x - i) ? bb : best, bars[0]);
+    cross.setAttribute("x1", x(b.x)); cross.setAttribute("x2", x(b.x)); cross.setAttribute("visibility", "visible");
+    tip.replaceChildren();
+    const dOf = dayList.filter(d => d.x <= b.x + 1e-9).pop();
+    addRow(tip, (days > 1 && dOf ? (dOf.back === 0 ? "Today" : dOf.label) + " " : "") + b.t + " ET", "", null, true);
+    addRow(tip, "Open", fmt(b.o)); addRow(tip, "High", fmt(b.h)); addRow(tip, "Low", fmt(b.l)); addRow(tip, "Close", fmt(b.c));
+    linesV.forEach(L => {
+      const [a, b2] = L.pts;
+      if (b.x >= a[0] && b.x <= b2[0] && b2[0] !== a[0]) {
+        const v = a[1] + (b2[1] - a[1]) * (b.x - a[0]) / (b2[0] - a[0]);
+        addRow(tip, L.kind === "support" ? "Support" : "Resistance", fmt(v), cssVar(L.kind === "support" ? "--support" : "--resist"));
+      }
+    });
+    if (p && b.x >= p.entry_x) {
+      let sv = p.init_stop;
+      (p.stop_steps || []).forEach(st2 => { if (st2[0] <= b.x) sv = st2[1]; });
+      addRow(tip, "Stop", fmt(sv), cssVar("--stop"));
+    }
+    tip.style.display = "block";
+    const wrap = $("chartwrap").getBoundingClientRect();
+    let left = ev.clientX - wrap.left + 14;
+    if (left + tip.offsetWidth > wrap.width) left = ev.clientX - wrap.left - tip.offsetWidth - 14;
+    tip.style.left = left + "px";
+    tip.style.top = Math.max(0, ev.clientY - wrap.top - 20) + "px";
+  });
+  hit.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
+}
+function tri(svg, cx, cy, color) {
+  el("path", {d: `M${cx},${cy - 1} l-5,9 h10 z`, fill: color, stroke: cssVar("--surface"), "stroke-width": 1.5}, svg);
+}
+function addRow(tip, label, value, color, header) {
+  const row = document.createElement("div"); row.className = "row";
+  const l = document.createElement("span"); l.className = "lab";
+  if (color) { const k = document.createElement("i"); k.className = "key"; k.style.borderColor = color; l.appendChild(k); }
+  l.appendChild(document.createTextNode(label));
+  if (header) l.style.fontWeight = "600";
+  const v = document.createElement("b"); v.textContent = value;
+  row.append(l, v); tip.appendChild(row);
+}
+function placeLabels(svg, labels, xLab, top, bottom) {
+  labels.sort((a, b) => a[0] - b[0]);
+  const gap = 14;
+  for (let i = 0; i < labels.length; i++) {
+    labels[i][0] = Math.max(labels[i][0], top + 6, i ? labels[i - 1][0] + gap : -1e9);
+  }
+  for (let i = labels.length - 1; i >= 0; i--) {
+    labels[i][0] = Math.min(labels[i][0], bottom - 2, i < labels.length - 1 ? labels[i + 1][0] - gap : 1e9);
+  }
+  labels.forEach(([ly, text, color]) => {
+    el("rect", {x: xLab - 6, y: ly - 1, width: 3, height: 3, fill: color}, svg);
+    const t = el("text", {x: xLab, y: ly + 4, "font-size": 11, "font-weight": 600, fill: cssVar("--ink")}, svg);
+    t.textContent = text;
+  });
+}
+function niceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+  return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p;
+}
+
+// ------------------------------------------------------------------ bar-size dropdown
+// Shown only on the PC running the bot (the server adds window.__CONTROL__ for allowed viewers).
+// Changing it changes the bars the bot TRADES on, not just the chart. It cannot place or cancel orders.
+const CTRL = SNAP ? null : (window.__CONTROL__ || null);
+let tfBusy = false;
+function renderBarPicker(s) {
+  const bm = s.bar_minutes || 5, sel = $("tf"), sizes = s.bar_sizes || [bm];
+  const can = CTRL && !s.final;
+  $("barlabel").textContent = can ? "Bars:" : bm + "-min bars";
+  sel.hidden = !can;
+  if (!can) { $("tfnote").textContent = ""; return; }
+  if (sel.options.length !== sizes.length) {
+    sel.replaceChildren(...sizes.map(m => { const o = document.createElement("option"); o.value = m; o.textContent = m + " min"; return o; }));
+  }
+  if (!tfBusy && document.activeElement !== sel) sel.value = String(s.pending_bars || bm);
+  $("tfnote").textContent = s.pending_bars ? `switching to ${s.pending_bars} min…` : "";
+}
+$("tf").addEventListener("change", async ev => {
+  const sel = ev.target, want = Number(sel.value), cur = S ? S.bar_minutes : null;
+  if (S && S.pos && !confirm(`Switch the bot to ${want}-minute bars?\n\nThe open position and its stop stay as they are; the stop keeps trailing on ${want}-minute swing lows.`)) {
+    sel.value = String(S.pending_bars || cur); return;
+  }
+  tfBusy = true; sel.disabled = true; $("tfnote").textContent = "sending…";
+  try {
+    const key = new URLSearchParams(location.search).get("key");
+    const r = await fetch("bar-size" + (key ? "?key=" + encodeURIComponent(key) : ""), {
+      method: "POST", cache: "no-store",
+      headers: {"Content-Type": "application/json", "X-Swingbot-Token": CTRL.token},
+      body: JSON.stringify({minutes: want}),
+    });
+    const res = await r.json().catch(() => ({}));
+    $("tfnote").textContent = res.message || (r.ok ? "" : "refused");
+    if (!r.ok && cur) sel.value = String(cur);
+  } catch (e) {
+    $("tfnote").textContent = "couldn't reach the bot";
+    if (cur) sel.value = String(cur);
+  } finally { tfBusy = false; sel.disabled = false; }
+});
+
+// ------------------------------------------------------------------ tables
+function table(container, cols, rows, empty) {
+  container.replaceChildren();
+  if (!rows.length) { const d = document.createElement("div"); d.className = "none"; d.textContent = empty; container.appendChild(d); return; }
+  const t = document.createElement("table"), tr = document.createElement("tr");
+  cols.forEach(c => { const th = document.createElement("th"); th.textContent = c.h; if (c.num) th.className = "num"; tr.appendChild(th); });
+  const thead = document.createElement("thead"); thead.appendChild(tr); t.appendChild(thead);
+  const tb = document.createElement("tbody");
+  rows.forEach(r => {
+    const row = document.createElement("tr");
+    cols.forEach(c => {
+      const td = document.createElement("td"); if (c.num) td.className = "num";
+      const v = c.f(r); td.textContent = v;
+      if (c.tone) { const tc = tone(c.tone(r)); if (tc) td.classList.add(tc); }
+      row.appendChild(td);
+    });
+    tb.appendChild(row);
+  });
+  t.appendChild(tb);
+  const wrap = document.createElement("div"); wrap.style.overflowX = "auto"; wrap.appendChild(t);
+  container.appendChild(wrap);
+}
+function renderTables(s) {
+  table($("trades"), [
+    {h: "In", f: r => r.entry_time}, {h: "Out", f: r => r.exit_time}, {h: "Type", f: r => r.kind},
+    {h: "Shares", num: 1, f: r => r.shares}, {h: "Entry", num: 1, f: r => fmt(r.entry)}, {h: "Exit", num: 1, f: r => fmt(r.exit)},
+    {h: "Exit by", f: r => r.reason}, {h: "P&L", num: 1, f: r => signed(r.pnl), tone: r => r.pnl},
+  ], s.trades || [], "No completed trades yet.");
+  table($("scan"), [
+    {h: "Symbol", f: r => r.symbol}, {h: "Score", num: 1, f: r => fmt(r.score)}, {h: "Setup", f: r => r.setup}, {h: "Detail", f: r => r.detail},
+  ], s.scan || [], "Scan runs at 9:35 ET.");
+  const log = $("log"); log.replaceChildren();
+  (s.events || []).forEach(e => {
+    const d = document.createElement("div"); d.className = e.level;
+    const t = document.createElement("span"); t.className = "t"; t.textContent = e.t + "  ";
+    d.append(t, document.createTextNode(e.msg)); log.appendChild(d);
+  });
+  if (!log.childNodes.length) { const d = document.createElement("div"); d.className = "none"; d.textContent = "Nothing yet."; log.appendChild(d); }
+}
+
+// ------------------------------------------------------------------ freshness
+function renderBanner(s) {
+  const b = $("banner"); let msg = "", info = false;
+  if (SNAP) { msg = `End-of-day snapshot from ${s.date || ""} – not live.`; info = true; }
+  else if (failing) msg = "Can't reach the bot – it may have stopped. Showing the last data received.";
+  else if (s.epoch && !s.final && Date.now() / 1000 - s.epoch > 120)
+    msg = `No update from the bot for ${Math.round((Date.now() / 1000 - s.epoch) / 60)} min – check that it's still running.`;
+  else if (s.final) { msg = "Session finished."; info = true; }
+  b.textContent = msg; b.className = "banner" + (msg ? " show" : "") + (info ? " info" : "");
+}
+
+function render(s) { S = s; renderTop(s); renderChart(s); renderTables(s); renderBanner(s); }
+
+async function poll() {
+  try {
+    const key = new URLSearchParams(location.search).get("key");
+    const r = await fetch("status.json" + (key ? "?key=" + encodeURIComponent(key) : ""), {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    const s = await r.json();
+    failing = false; lastOk = Date.now();
+    render(s);
+  } catch (e) {
+    failing = true; if (S) renderBanner(S);
+  }
+}
+$("days").value = String(VIEW_DAYS);
+$("days").addEventListener("change", ev => {
+  VIEW_DAYS = Number(ev.target.value) || 1;
+  try { localStorage.setItem("swingbot.days", String(VIEW_DAYS)); } catch (e) {}
+  if (S) renderChart(S);
+});
+if (SNAP) render(SNAP);
+else { poll(); setInterval(poll, 3000); }
+window.addEventListener("resize", () => S && renderChart(S));
+</script>
+</body>
+</html>

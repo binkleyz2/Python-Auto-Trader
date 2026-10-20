@@ -1,0 +1,11 @@
+# S&P 100 as of the Sept 21, 2026 rebalance (GOOG left out; GOOGL covers Alphabet)
+watchlist: [AAPL, ABBV, ABT, ACN, ADBE, AMAT, AMD, AMGN, AMT, AMZN,
+            ANET, AVGO, AXP, BA, BAC, BKNG, BLK, BMY, BNY, BRK.B,
+            C, CAT, CMCSA, COF, COP, COST, CRM, CSCO, CVS, CVX,
+            DE, DELL, DHR, DIS, DUK, EMR, FDX, GD, GE, GEV,
+            GILD, GM, GOOGL, GS, HD, IBM, INTC, INTU, ISRG, JNJ,
+            JPM, KO, LIN, LLY, LMT, LOW, LRCX, MA, MCD, MDLZ,
+            MDT, META, MMM, MO, MRK, MS, MSFT, MU, NEE, NFLX,
+            NOW, NVDA, ORCL, PANW, PEP, PFE, PG, PLTR, PM, QCOM,
+            RTX, SBUX, SCHW, SNDK, SO, T, TMO, TMUS, TSLA, TXN,
+            UBER, UNH, UNP, UPS, USB, V, VZ, WFC, WMT, XOM]

@@ -1,0 +1,66 @@
+# Edit these to tune the bot. Anything left out uses the default in swingbot/config.py.
+
+# Broker: "public" or "alpaca"
+broker: alpaca
+alpaca_paper: true          # alpaca only: true = paper account (fake money), false = REAL money
+alpaca_feed: iex            # alpaca only: "iex" (free data plan) or "sip" (paid full-market data)
+
+#watchlist: [CCC, INTC, NVDA, CRWV, SPCX, OPEN, IREN, NOK, AAPL, SOFI, VRNS, WULF, PLUG, F, BAC, GRAB, BBD, SMCI, CIFR, T, NFLX, NU, AAL, RIG, FRO, DHT, STNG, INSW]
+# S&P 100 as of the Sept 21, 2026 rebalance (GOOG left out; GOOGL covers Alphabet)
+#watchlist: [AAPL, ABBV, ABT, ACN, ADBE, AMAT, AMD, AMGN, AMT, AMZN,
+#            ANET, AVGO, AXP, BA, BAC, BKNG, BLK, BMY, BNY, BRK.B,
+#            C, CAT, CMCSA, COF, COP, COST, CRM, CSCO, CVS, CVX,
+#            DE, DELL, DHR, DIS, DUK, EMR, FDX, GD, GE, GEV,
+#            GILD, GM, GOOGL, GS, HD, IBM, INTC, INTU, ISRG, JNJ,
+#            JPM, KO, LIN, LLY, LMT, LOW, LRCX, MA, MCD, MDLZ,
+#            MDT, META, MMM, MO, MRK, MS, MSFT, MU, NEE, NFLX,
+#            NOW, NVDA, ORCL, PANW, PEP, PFE, PG, PLTR, PM, QCOM,
+#            RTX, SBUX, SCHW, SNDK, SO, T, TMO, TMUS, TSLA, TXN,
+#            UBER, UNH, UNP, UPS, USB, V, VZ, WFC, WMT, XOM]
+watchlist_file: watchlist_russell2000.yaml
+min_price: 10
+min_avg_dollar_volume: 10000000
+
+# Swing points: 5 bars on each side, on 5-minute bars
+swing_n: 5
+touch_tolerance_atr: 0.25
+break_tolerance_atr: 0.10
+breakout_volume_mult: 1.2
+
+# Long only: bounces off rising support, breakouts through falling resistance
+enable_bounce: true
+enable_breakout: true
+stop_buffer_atr: 0.25
+min_stop_atr: 0.5
+max_stop_atr: 3.0
+
+# Exits: the stop trails up under each new confirmed swing low; no fixed profit target
+trail_stop: true
+trail_min_step_atr: 0.1        # ignore stop raises smaller than this (fewer order changes)
+use_target: false              # true = also take profit at reward_risk x the risk
+reward_risk: 2.0
+
+# Times are Eastern
+first_entry_time: "09:45"
+last_entry_time: "15:30"
+flatten_time: "15:50"
+max_trades_per_day: 5
+
+# Risk
+risk_per_trade_pct: 0.5
+max_position_pct: 25
+daily_loss_limit_pct: 1.5
+use_margin: true
+settled_cash_only: true        # only spend cash that was already settled; today's sale proceeds are never reused
+buying_power_buffer_pct: 2.0   # live orders never use more than 98% of current cash buying power
+
+# Live dashboard: http://127.0.0.1:8765 while `run` is going
+dashboard: true
+dashboard_port: 8765
+dashboard_open_browser: true
+dashboard_lan: true        # true = phones/PCs on your home network can view it (needs the key)
+dashboard_key: "xyzzy!!!"           # set your own key to bookmark the address; blank = new random key each run
+
+# Backtest
+starting_equity: 25000
+slippage_pct: 0.02

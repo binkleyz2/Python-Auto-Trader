@@ -1,0 +1,311 @@
+"""Alpaca version of the live bot. Same strategy, risk rules, trailing stop and dashboard as the
+Public version; only the broker hooks differ.
+
+Modes (set by `run` flags and `alpaca_paper` in config.yaml):
+  run                  dry run: real Alpaca data, simulated fills, no orders at all
+  run --live           orders go to Alpaca: your PAPER account if alpaca_paper is true (default),
+                       your REAL-MONEY account only if alpaca_paper is false
+
+Alpaca specifics handled here:
+  * Entry is a bracket order (market buy + stop + profit target). Alpaca lets the stop leg of a
+    bracket be repriced in place but not the stop of a stop-only (OTO) order, so when no target
+    is wanted the target is parked far above the price (alpaca_far_target_pct) where it won't fill.
+  * Alpaca's account data has no separate "settled cash" figure. The bot uses the cash it had
+    when the session started as its limit for the day and never reuses money from that day's sales.
+  * Free data plan: live 5-minute bars come from one exchange (IEX). The morning volume screen
+    uses full-market daily volume instead (allowed on the free plan because it's from past days).
+"""
+from __future__ import annotations
+
+import logging
+import os
+import sys
+import time as _time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+from decimal import ROUND_UP, Decimal
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+from .config import Config
+from .data import COLS, empty_bars, normalize
+from .live import Bot, _NOrder, _price, now_et
+
+log = logging.getLogger("swingbot")
+UTC = ZoneInfo("UTC")
+OPEN_ALPACA = {"new", "accepted", "pending_new", "partially_filled", "held", "pending_replace",
+               "accepted_for_bidding", "calculated", "pending_cancel"}
+
+
+def _v(x) -> str:
+    return str(getattr(x, "value", x))
+
+
+class AlpacaClients:
+    """The two Alpaca connections the bot needs: trading (orders, account) and market data."""
+
+    def __init__(self, trading, data, feed: str = "iex", paper: bool = True):
+        self.trading, self.data, self.feed, self.paper = trading, data, feed.lower(), paper
+
+    def close(self) -> None:
+        pass
+
+
+def make_alpaca_client(cfg: Config) -> AlpacaClients:
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.trading.client import TradingClient
+    key = os.environ.get("ALPACA_API_KEY")
+    secret = os.environ.get("ALPACA_SECRET_KEY")
+    if not key or not secret:
+        sys.exit("Set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env (see .env.example).")
+    return AlpacaClients(TradingClient(key, secret, paper=cfg.alpaca_paper),
+                         StockHistoricalDataClient(key, secret), cfg.alpaca_feed, cfg.alpaca_paper)
+
+
+class AlpacaBot(Bot):
+    broker_name = "Alpaca"
+
+    # ------------------------------------------------------------------ data
+    def _feed(self, sip: bool = False):
+        from alpaca.data.enums import DataFeed
+        return DataFeed.SIP if (sip or self.client.feed == "sip") else DataFeed.IEX
+
+    def _bars_df(self, symbols, period: str) -> pd.DataFrame:
+        from alpaca.data.enums import Adjustment
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        now = now_et()
+        back = 10 if self.bm >= 5 else 5                  # 1-minute bars: a shorter history is plenty
+        start = (now - timedelta(days=back)) if period != "DAY" else now.replace(hour=4, minute=0, second=0, microsecond=0)
+        return self.client.data.get_stock_bars(StockBarsRequest(
+            symbol_or_symbols=symbols, timeframe=TimeFrame(self.bm, TimeFrameUnit.Minute),
+            start=start.astimezone(UTC), end=now.astimezone(UTC), feed=self._feed(),
+            adjustment=Adjustment.SPLIT)).df
+
+    @staticmethod
+    def _one(df, symbol) -> pd.DataFrame:
+        if df is None or df.empty:
+            return empty_bars()
+        if isinstance(df.index, pd.MultiIndex):
+            if symbol not in df.index.get_level_values(0):
+                return empty_bars()
+            df = df.xs(symbol, level=0)
+        return normalize(df)
+
+    def fetch_bars(self, symbol: str, period: str) -> pd.DataFrame:
+        return self._one(self._bars_df(symbol, period), symbol)
+
+    BATCH = 100                                           # symbols per bars request
+
+    def fetch_many(self, symbols: list[str], period: str) -> dict[str, pd.DataFrame]:
+        """Alpaca returns many symbols per request: 100 per request, scan_workers requests at once."""
+        symbols = list(dict.fromkeys(symbols))
+        chunks = [symbols[i:i + self.BATCH] for i in range(0, len(symbols), self.BATCH)]
+        got: dict[str, pd.DataFrame] = {}
+
+        def run(chunk):
+            try:
+                df = self._bars_df(chunk, period)
+            except Exception as e:
+                if len(chunk) == 1:
+                    log.warning("bars for %s failed: %s", chunk[0], e)
+                    return
+                log.warning("bars for %s..%s failed (%s) - retrying one by one", chunk[0], chunk[-1], e)
+                for s in chunk:                          # one bad symbol can sink a whole request
+                    run([s])
+                return
+            for s in chunk:
+                got[s] = self._one(df, s)
+
+        with ThreadPoolExecutor(max(1, min(int(self.cfg.scan_workers), len(chunks) or 1))) as ex:
+            list(ex.map(run, chunks))
+        return {s: got[s] for s in symbols if s in got}
+
+    def liquidity(self, symbols: list[str]) -> dict | None:
+        """Full-market average daily dollar volume (last 5 sessions). Only needed on the free IEX feed,
+        whose volume is a small slice of the real total."""
+        if self.client.feed == "sip" or not symbols:
+            return None
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        now = now_et()
+        frames = []
+        for i in range(0, len(symbols), 200):            # keep each request's address a sane length
+            part = self.client.data.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=symbols[i:i + 200], timeframe=TimeFrame.Day,
+                start=(now - timedelta(days=14)).astimezone(UTC),
+                end=(now - timedelta(minutes=16)).astimezone(UTC),  # free plan: full-market data must be 15+ min old
+                feed=self._feed(sip=True))).df
+            if part is not None and not part.empty:
+                frames.append(part)
+        out = {}
+        if not frames:
+            return out
+        df = pd.concat(frames)
+        for sym in symbols:
+            try:
+                d = df.xs(sym, level=0)
+            except KeyError:
+                continue
+            idx = pd.DatetimeIndex(d.index).tz_convert("America/New_York")
+            d = d[idx.date < now.date()]
+            if len(d):
+                out[sym] = float((d["close"] * d["volume"]).tail(5).mean())
+        return out
+
+    def _last_trade_price(self) -> float | None:
+        from alpaca.data.requests import StockLatestTradeRequest
+        res = self.client.data.get_stock_latest_trade(
+            StockLatestTradeRequest(symbol_or_symbols=self.symbol, feed=self._feed()))
+        t = res.get(self.symbol) if isinstance(res, dict) else res
+        return float(t.price) if t is not None else None
+
+    # --------------------------------------------------------------- account
+    def account_equity(self) -> float:
+        return float(self.client.trading.get_account().equity)
+
+    def _cash_now(self) -> tuple[float | None, float | None]:
+        a = self.client.trading.get_account()
+        cash_bp = min(float(a.cash), float(a.non_marginable_buying_power))
+        bp = float(a.buying_power) if self.cfg.use_margin else cash_bp
+        # Alpaca reports no separate settled-cash figure. Cash at the start of the session is treated
+        # as settled (the previous day's sales settle that day under T+1), and the bot's own ledger
+        # (start cash minus today's buys, never adding today's sale proceeds) does the rest.
+        return bp, cash_bp
+
+    def session_checks(self) -> None:
+        a = self.client.trading.get_account()
+        log.info("Alpaca %s account %s | equity %.2f | cash %.2f | margin multiplier %s",
+                 "PAPER" if self.client.paper else "LIVE (real money)", a.account_number,
+                 float(a.equity), float(a.cash), a.multiplier)
+        if a.trading_blocked or a.account_blocked or a.trade_suspended_by_user:
+            log.error("Alpaca reports this account cannot trade right now - no orders will be placed.")
+            self.halted = True
+        if not self.cfg.use_margin and str(a.multiplier) not in ("1", "1.0"):
+            log.info("This is a margin account; the bot only spends cash. You can also make it cash-only "
+                     "at Alpaca (account configuration: max margin multiplier = 1).")
+        if self.cfg.settled_cash_only:
+            log.info("Alpaca doesn't report settled cash separately: today's limit is the cash at the start "
+                     "of the session, and proceeds from today's sales are never reused.")
+
+    def held_quantity(self) -> int:
+        from alpaca.common.exceptions import APIError
+        try:
+            p = self.client.trading.get_open_position(self.symbol)
+        except APIError as e:
+            if _is_not_found(e):
+                return 0
+            raise                                   # a real error must never look like "no shares"
+        return int(Decimal(str(p.qty)))
+
+    # ---------------------------------------------------------------- orders
+    def _orders(self) -> list:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+        since = now_et().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+        raw = self.client.trading.get_orders(GetOrdersRequest(
+            status=QueryOrderStatus.ALL, symbols=[self.symbol], nested=True, after=since, limit=200))
+        out = []
+
+        def add(o, parent=None):
+            typ = _v(getattr(o, "order_type", None) or getattr(o, "type", "")).upper()
+            out.append(_NOrder(id=str(o.id), parent=parent, side=_v(o.side).upper(), type=typ,
+                               open=_v(o.status).lower() in OPEN_ALPACA, qty=o.qty, created_at=o.created_at, raw=o))
+
+        for o in raw or []:
+            add(o)
+            for leg in (getattr(o, "legs", None) or []):
+                add(leg, parent=str(o.id))
+        return out
+
+    def _wait_fill(self, order_id: str, timeout: int = 60):
+        """Poll until filled or finished. Returns the last order state."""
+        end = _time.monotonic() + timeout
+        o = self.client.trading.get_order_by_id(order_id)
+        while _v(o.status).lower() not in ("filled", "canceled", "rejected", "expired", "done_for_day"):
+            if _time.monotonic() > end:
+                break
+            _time.sleep(1)
+            o = self.client.trading.get_order_by_id(order_id)
+        return o
+
+    def _submit_entry(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None, entry_ref: float):
+        from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
+        # Alpaca can only reprice the stop of a full bracket, so with no target wanted the target is
+        # parked far above the price where it won't fill during the day.
+        target = tgt_d if tgt_d is not None else _price(entry_ref * (1 + self.cfg.alpaca_far_target_pct / 100), ROUND_UP)
+        o = self.client.trading.submit_order(MarketOrderRequest(
+            symbol=self.symbol, qty=shares, side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET, client_order_id=str(uuid.uuid4()),
+            stop_loss=StopLossRequest(stop_price=float(stop_d)),
+            take_profit=TakeProfitRequest(limit_price=float(target))))
+        oid = str(o.id)
+        self.my_order_ids.add(oid)
+        log.info("bracket order submitted: %s (stop %s, %s %s)", oid, stop_d,
+                 "target" if tgt_d is not None else "parked target", target)
+        o = self._wait_fill(oid)
+        if _v(o.status).lower() == "filled":
+            log.info("filled %s @ %s", o.filled_qty, o.filled_avg_price)
+            return oid, float(o.filled_avg_price)
+        log.warning("entry not fully filled within 60s (status %s); cancelling any remainder", _v(o.status))
+        try:
+            self.client.trading.cancel_order_by_id(oid)
+        except Exception as e:
+            log.error("cancel failed: %s", e)
+        return oid, float(o.filled_avg_price) if getattr(o, "filled_avg_price", None) else None
+
+    def _place_stop(self, qty: int, stop_d: Decimal) -> str:
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import StopOrderRequest
+        o = self.client.trading.submit_order(StopOrderRequest(
+            symbol=self.symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
+            stop_price=float(stop_d), client_order_id=str(uuid.uuid4())))
+        return str(o.id)
+
+    def _replace_stop(self, so, new_d: Decimal) -> str:
+        from alpaca.trading.requests import ReplaceOrderRequest
+        o = self.client.trading.replace_order_by_id(so.id, ReplaceOrderRequest(stop_price=float(new_d)))
+        return str(o.id)
+
+    def _cancel(self, order_id: str) -> None:
+        self.client.trading.cancel_order_by_id(order_id)
+
+    def _market_sell(self, qty: int):
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest
+        o = self.client.trading.submit_order(MarketOrderRequest(
+            symbol=self.symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
+            client_order_id=str(uuid.uuid4())))
+        oid = str(o.id)
+        o = self._wait_fill(oid)
+        if _v(o.status).lower() == "filled":
+            return oid, float(o.filled_avg_price)
+        log.error("sell not confirmed (status %s) - CHECK THE ACCOUNT", _v(o.status))
+        return oid, None
+
+    def _filled_sell_price(self, order_ids) -> float | None:
+        price = None
+        for oid in order_ids:
+            try:
+                o = self.client.trading.get_order_by_id(oid)
+            except Exception:
+                continue
+            if (_v(o.side).lower() == "sell" and _v(o.status).lower() == "filled"
+                    and getattr(o, "filled_avg_price", None) is not None):
+                price = float(o.filled_avg_price)
+        return price
+
+
+def _is_not_found(e) -> bool:
+    try:
+        if e.status_code == 404:
+            return True
+    except Exception:
+        pass
+    try:
+        return int(e.code) == 40410000            # "position does not exist"
+    except Exception:
+        return False

@@ -1,0 +1,122 @@
+"""All tunable settings in one place. Edit config.yaml rather than this file."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field, fields
+from pathlib import Path
+
+import yaml
+
+
+@dataclass
+class Config:
+    # --- Broker ----------------------------------------------------------------
+    broker: str = "public"                # "public", "alpaca" or "ninjatrader"
+    alpaca_paper: bool = True             # alpaca: True = paper (fake money) account, False = real money
+    alpaca_feed: str = "iex"              # alpaca: "iex" (free plan) or "sip" (paid full-market data)
+    alpaca_far_target_pct: float = 50.0   # alpaca: with no target, park the bracket's target this far above
+    ninja_env: str = "demo"               # ninjatrader: "demo" (simulated money) or "live" (real money)
+    ninja_account: str = ""               # ninjatrader: account name to trade (blank = first active account)
+    futures_watchlist: list[str] = field(default_factory=lambda: ["MGCZ6", "MCLZ6"])   # contract codes
+    futures_max_contracts: int = 1        # never more than this many contracts per trade
+    futures_roll_days: int = 5            # skip a contract this many days before first notice / expiry
+
+    # --- Watchlist / scanner -------------------------------------------------
+    watchlist: list[str] = field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "AMD", "AMZN", "META", "GOOGL", "TSLA"])
+    watchlist_file: str = ""              # read the watchlist from this file instead (e.g. watchlist_russell2000.yaml)
+    min_price: float = 10.0               # skip stocks under this price
+    min_avg_dollar_volume: float = 50e6   # skip thin stocks (avg daily $ volume)
+    scan_workers: int = 10                # morning scan: download this many symbols' bars at once (1-32)
+
+    # --- Bars ---------------------------------------------------------------------
+    bar_minutes: int = 5                  # bar size: 1, 2, 3, 5, 10, 15 or 30 (Public: 1, 5, 10, 15, 30)
+
+    # --- Swing / trend line rules ---------------------------------------------
+    swing_n: int = 5                      # bars on EACH side that define a swing point (of bar_minutes each)
+    max_line_age_bars: int = 400          # ignore lines whose first anchor is older than this (~5 trading days)
+    min_anchor_gap_bars: int = 6          # anchors must be at least this far apart
+    touch_tolerance_atr: float = 0.25     # "touching" the line = within this many ATRs
+    break_tolerance_atr: float = 0.10     # breakout close must clear the line by this many ATRs
+    atr_period: int = 14
+    breakout_volume_mult: float = 1.2     # breakout bar volume vs 20-bar average (0 disables)
+
+    # --- Trade management ------------------------------------------------------
+    enable_bounce: bool = True
+    enable_breakout: bool = True
+    trail_stop: bool = True               # raise the stop below each new confirmed swing low
+    trail_min_step_atr: float = 0.1       # only move the stop if it rises at least this many ATRs
+    use_target: bool = False              # fixed take-profit at reward_risk x risk (off = let winners run)
+    reward_risk: float = 2.0              # take-profit multiple, only used when use_target is true
+    stop_buffer_atr: float = 0.25         # stop sits this far below the line / swing low
+    min_stop_atr: float = 0.5             # stop is at least this far below entry (avoids noise stop-outs)
+    max_stop_atr: float = 3.0             # skip trades whose stop is wider than this
+    first_entry_time: str = "09:45"       # no entries in the opening 15 minutes
+    last_entry_time: str = "15:30"
+    flatten_time: str = "15:50"           # sell everything at/after this time (ET)
+    max_trades_per_day: int = 2
+
+    # --- Risk --------------------------------------------------------------------
+    risk_per_trade_pct: float = 0.5       # % of equity risked per trade (entry-to-stop)
+    max_position_pct: float = 25.0        # cap any single position at this % of equity
+    daily_loss_limit_pct: float = 1.5     # stop trading for the day after losing this %
+    use_margin: bool = False              # False = cash-only buying power
+    settled_cash_only: bool = True        # live: only spend cash that was settled before today; never sale proceeds
+    buying_power_buffer_pct: float = 2.0  # live: keep this % of buying power unused (market-order slippage)
+
+    # --- Live dashboard (a page on this computer only) -------------------------
+    dashboard: bool = True
+    dashboard_port: int = 8765
+    dashboard_open_browser: bool = True   # open the page automatically when `run` starts
+    dashboard_lan: bool = False           # True = other devices on your home network can view it too
+    dashboard_key: str = ""               # access key for network viewers (random each run if left blank)
+    dashboard_bar_control: bool = True    # show the bar-size dropdown on the page (on this PC only)
+    dashboard_lan_control: bool = False   # True = network viewers (with the key) can use the dropdown too
+
+    # --- Backtest only -------------------------------------------------------------
+    starting_equity: float = 25_000.0
+    slippage_pct: float = 0.02            # % per side
+
+    def validate(self) -> None:
+        if not 1 <= int(self.scan_workers) <= 32:
+            raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
+        if self.bar_minutes not in (1, 2, 3, 5, 10, 15, 30):
+            raise ValueError(f"bar_minutes must be 1, 2, 3, 5, 10, 15 or 30, not {self.bar_minutes!r}")
+        if self.broker == "public" and self.bar_minutes not in (1, 5, 10, 15, 30):
+            raise ValueError("Public offers 1, 5, 10, 15 or 30-minute bars")
+
+    @classmethod
+    def load(cls, path: str | Path | None) -> "Config":
+        if path is None or not Path(path).exists():
+            return cls()
+        data = yaml.safe_load(Path(path).read_text()) or {}
+        known = {f.name for f in fields(cls)}
+        unknown = set(data) - known
+        if unknown:
+            raise ValueError(f"Unknown settings in {path}: {sorted(unknown)}")
+        cfg = cls(**data)
+        if cfg.watchlist_file:
+            cfg.watchlist = read_watchlist(Path(path).parent / cfg.watchlist_file)
+        if cfg.broker not in ("public", "alpaca", "ninjatrader"):
+            raise ValueError(f"broker must be 'public', 'alpaca' or 'ninjatrader', not {cfg.broker!r}")
+        cfg.validate()
+        if cfg.ninja_env not in ("demo", "live"):
+            raise ValueError(f"ninja_env must be 'demo' or 'live', not {cfg.ninja_env!r}")
+        if cfg.alpaca_feed not in ("iex", "sip"):
+            raise ValueError(f"alpaca_feed must be 'iex' or 'sip', not {cfg.alpaca_feed!r}")
+        return cfg
+
+
+def read_watchlist(path: str | Path) -> list[str]:
+    """Symbols from a watchlist file: a `watchlist: [...]` YAML file (as made by
+    tools/russell2000_watchlist.py), a YAML list, or plain text with symbols separated by
+    commas, spaces or new lines. Lines starting with # are ignored."""
+    import re
+    p = Path(path)
+    if not p.exists():
+        raise ValueError(f"watchlist_file not found: {p.resolve()}")
+    # read as plain text, not YAML: YAML would turn tickers like ON or NO into true/false
+    text = "\n".join(line.split("#", 1)[0] for line in p.read_text(encoding="utf-8-sig").splitlines())
+    words = re.split(r"[\s,\[\]'\"]+", re.sub(r"\bwatchlist\s*:", " ", text))
+    out = list(dict.fromkeys(w.upper() for w in words if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9./]*", w)))
+    if not out:
+        raise ValueError(f"watchlist_file {p} has no symbols in it")
+    return out
