@@ -107,7 +107,17 @@ watchlist_file: watchlist_russell2000.yaml   # or watchlist_sp100.yaml; "" = use
 
 The file goes in the same folder as `config.yaml`. When `watchlist_file` is set, it replaces the `watchlist:` line. Restart the bot after changing it; the log's first scan line says which list it used ("Scanning 300 symbols from watchlist_russell2000.yaml"). A watchlist file can be in the same `watchlist: [...]` form, or just symbols separated by commas, spaces or new lines; lines starting with `#` are ignored.
 
-`watchlist_sp100.yaml` (the S&P 100 as of the Sept 21, 2026 rebalance) comes with the bot. `tools/russell2000_watchlist.py` builds `watchlist_russell2000.yaml` from the current iShares IWM holdings: `py tools\russell2000_watchlist.py` (all), or add `--top 300` and/or `--min-price 10` for a shorter list. Rerun it now and then to pick up index changes.
+Ready-made lists and a script to build or refresh them, from the swingbot folder:
+
+| Index | Command | File | Size |
+| --- | --- | --- | --- |
+| S&P 100 | (ships with the bot; edit by hand) | `watchlist_sp100.yaml` | 100 |
+| Dow Jones Industrial Average | `py tools\index_watchlist.py dow` (ships as of June 29, 2026) | `watchlist_dow30.yaml` | 30 |
+| S&P 500 | `py tools\index_watchlist.py sp500` | `watchlist_sp500.yaml` | ~500 |
+| Russell 2000 | `py tools\index_watchlist.py russell2000 --top 300 --min-price 10` | `watchlist_russell2000.yaml` | ~2,000 |
+| Nasdaq Composite | `py tools\index_watchlist.py nasdaq` | `watchlist_nasdaq.yaml` | ~3,000 |
+
+`--top N` keeps the N largest by index weight and `--min-price P` drops stocks under $P, where the source has weights and prices (S&P 500, Russell 2000; `--top` also works for the Dow). The Nasdaq list has neither; the bot's own `min_price` still applies when it scans. Sources: iShares IVV and IWM holdings, SPDR DIA holdings (with a built-in Dow list if that download fails), and Nasdaq's own directory of Nasdaq-listed securities (common stocks and ADRs only: no ETFs, warrants, units, rights, preferreds, notes or companies flagged deficient). If a download is blocked, the script says which address to open in your browser; then pass the saved file with `--file`. With Public's price data the scan runs at about 8 symbols a second, so the full Nasdaq Composite takes about 6–7 minutes; start the bot early. Switch lists with `watchlist_file:` in `config.yaml`.
 
 ## Using Alpaca instead of Public
 

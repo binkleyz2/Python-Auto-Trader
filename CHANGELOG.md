@@ -1,8 +1,20 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.2.1 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.4.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.4.0 – 2026-10-22
+
+- **More index watchlists:** `tools/index_watchlist.py` builds a watchlist file for the **S&P 500**
+  (iShares IVV holdings), the **Dow Jones Industrial Average** (SPDR DIA holdings, with a built-in list as a
+  fallback), the **Nasdaq Composite** (Nasdaq's list of Nasdaq-listed common stocks and ADRs) and the
+  **Russell 2000** (iShares IWM). `--top` and `--min-price` where the source has weights and prices;
+  `--file` for a file saved in the browser.
+- `watchlist_dow30.yaml` ships with the 30 Dow stocks as of June 29, 2026 (Alphabet in, Verizon out).
+- `tools/russell2000_watchlist.py` still works; it now calls the new script.
+- New requirement: `openpyxl` (reads the Dow holdings spreadsheet). Run
+  `py -m pip install --user -r requirements.txt` once.
 
 ## v1.3.0 – 2026-10-22
 
