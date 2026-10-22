@@ -107,10 +107,10 @@ def test_price_data_setting_is_checked():
     Config(broker="alpaca", price_data="public").validate()
     import tempfile, pathlib
     d = pathlib.Path(tempfile.mkdtemp())
-    (d / "c.yaml").write_text("broker: public\nprice_data: public\n")
+    (d / "c.yaml").write_text("broker: public\nprice_data: public\n", encoding="utf-8")
     with pytest.raises(ValueError):
         Config.load(d / "c.yaml")
-    (d / "c.yaml").write_text("broker: alpaca\nprice_data: yahoo\n")
+    (d / "c.yaml").write_text("broker: alpaca\nprice_data: yahoo\n", encoding="utf-8")
     with pytest.raises(ValueError):
         Config.load(d / "c.yaml")
 

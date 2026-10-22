@@ -210,7 +210,7 @@ def test_trail_reprices_stop_without_gap(tmp_path, monkeypatch):
     b.trigger_stop(at=50.25)
     bot._check_live_exit()
     assert bot.pos is None
-    assert "trail" in (tmp_path / "trades.csv").read_text()
+    assert "trail" in (tmp_path / "trades.csv").read_text(encoding="utf-8")
 
 
 def test_never_touches_your_own_shares_or_orders(tmp_path, monkeypatch):

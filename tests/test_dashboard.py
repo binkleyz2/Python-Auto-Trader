@@ -17,7 +17,7 @@ def test_serves_page_and_status_on_localhost_only(tmp_path):
         page = urllib.request.urlopen(url).read().decode()
         status = json.loads(urllib.request.urlopen(url + "status.json").read())
         assert "<svg" in page and status["symbol"] == "NVDA"
-        snap = d.snapshot(tmp_path / "snap.html").read_text()
+        snap = d.snapshot(tmp_path / "snap.html").read_text(encoding="utf-8")
         assert "window.__STATUS__" in snap and "NVDA" in snap
     finally:
         d.stop()

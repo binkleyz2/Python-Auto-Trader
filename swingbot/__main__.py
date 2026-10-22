@@ -115,7 +115,7 @@ def main(argv=None) -> None:
         out.mkdir(exist_ok=True)
         trades.to_csv(out / "trades.csv", index=False)
         curve.to_csv(out / "equity.csv")
-        (out / "picks.json").write_text(json.dumps(picks, indent=1))
+        (out / "picks.json").write_text(json.dumps(picks, indent=1), encoding="utf-8")
         print(json.dumps(bt.summarize(trades, curve, cfg), indent=2))
         print(f"\nDetails saved in {out}/ (trades.csv, equity.csv, picks.json)")
         return

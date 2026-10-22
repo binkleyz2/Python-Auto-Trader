@@ -101,16 +101,16 @@ def test_alpaca_asks_for_100_symbols_per_request(tmp_path, monkeypatch):
 
 def test_watchlist_file_replaces_the_watchlist_line(tmp_path):
     from swingbot.config import read_watchlist
-    (tmp_path / "config.yaml").write_text("watchlist: [AAPL, MSFT]\nwatchlist_file: r2k.yaml\n")
-    (tmp_path / "r2k.yaml").write_text("# Russell 2000 (test)\nwatchlist: [BTSG, MOG.A,\n            ON, NO]\n")
+    (tmp_path / "config.yaml").write_text("watchlist: [AAPL, MSFT]\nwatchlist_file: r2k.yaml\n", encoding="utf-8")
+    (tmp_path / "r2k.yaml").write_text("# Russell 2000 (test)\nwatchlist: [BTSG, MOG.A,\n            ON, NO]\n", encoding="utf-8")
     cfg = Config.load(tmp_path / "config.yaml")
     assert cfg.watchlist == ["BTSG", "MOG.A", "ON", "NO"]             # ON / NO stay tickers, not true/false
-    (tmp_path / "plain.txt").write_text("aapl msft\nnvda, AMD\n- TSLA  # a comment\n")
+    (tmp_path / "plain.txt").write_text("aapl msft\nnvda, AMD\n- TSLA  # a comment\n", encoding="utf-8")
     assert read_watchlist(tmp_path / "plain.txt") == ["AAPL", "MSFT", "NVDA", "AMD", "TSLA"]
-    (tmp_path / "config.yaml").write_text("watchlist_file: missing.yaml\n")
+    (tmp_path / "config.yaml").write_text("watchlist_file: missing.yaml\n", encoding="utf-8")
     with pytest.raises(ValueError, match="not found"):
         Config.load(tmp_path / "config.yaml")
-    (tmp_path / "config.yaml").write_text('watchlist: [AAPL]\nwatchlist_file: ""\n')
+    (tmp_path / "config.yaml").write_text('watchlist: [AAPL]\nwatchlist_file: ""\n', encoding="utf-8")
     assert Config.load(tmp_path / "config.yaml").watchlist == ["AAPL"]
 
 
@@ -125,7 +125,7 @@ def test_shipped_lists_load():
     d = Path(tempfile.mkdtemp())
     shutil.copy(root / "config.yaml", d / "config.yaml")
     import yaml
-    lf = (yaml.safe_load((root / "config.yaml").read_text()) or {}).get("watchlist_file")
+    lf = (yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8")) or {}).get("watchlist_file")
     if lf and not (d / lf).exists():
-        (d / lf).write_text("watchlist: [AAPL]\n")
+        (d / lf).write_text("watchlist: [AAPL]\n", encoding="utf-8")
     Config.load(d / "config.yaml")

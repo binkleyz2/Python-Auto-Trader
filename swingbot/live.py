@@ -536,7 +536,7 @@ class Bot:
             path = self._state_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(st, indent=1, default=str))
+            tmp.write_text(json.dumps(st, indent=1, default=str), encoding="utf-8")
             os.replace(tmp, path)                      # all or nothing, even if the PC dies mid-write
         except Exception as e:
             log.warning("could not save the day's state: %s", e)
@@ -546,7 +546,7 @@ class Bot:
         if not path.exists():
             return None
         try:
-            st = json.loads(path.read_text())
+            st = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             log.warning("ignoring unreadable %s (%s)", path.name, e)
             return None
@@ -568,7 +568,7 @@ class Bot:
             if f.name[:10] >= today:
                 continue
             try:
-                st = json.loads(f.read_text())
+                st = json.loads(f.read_text(encoding="utf-8"))
             except Exception:
                 return
             p = st.get("pos")
@@ -1136,7 +1136,7 @@ class Bot:
     def _record(self, event, pnl, exit_price=None) -> None:
         p = self.pos
         new = not self.trade_log.exists()
-        with self.trade_log.open("a", newline="") as fh:
+        with self.trade_log.open("a", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
             if new:
                 w.writerow(["time", "mode", "symbol", "kind", "event", "shares", "entry", "initial_stop",

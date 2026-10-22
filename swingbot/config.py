@@ -102,7 +102,7 @@ class Config:
     def load(cls, path: str | Path | None) -> "Config":
         if path is None or not Path(path).exists():
             return cls()
-        data = yaml.safe_load(Path(path).read_text()) or {}
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8-sig")) or {}
         known = {f.name for f in fields(cls)}
         unknown = set(data) - known
         if unknown:

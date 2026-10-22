@@ -102,9 +102,9 @@ def test_yesterdays_state_is_ignored(tmp_path, monkeypatch):
     a.trades_today = 2
     a.save_state()
     path = a._state_path()
-    st = json.loads(path.read_text())
+    st = json.loads(path.read_text(encoding="utf-8"))
     st["date"] = "2000-01-01"
-    path.write_text(json.dumps(st))
+    path.write_text(json.dumps(st), encoding="utf-8")
     b = new_bot()
     b.prepare()
     assert b.trades_today == 0

@@ -174,7 +174,7 @@ def test_no_dropdown_when_turned_off_or_in_snapshots(tmp_path):
         assert "window.__CONTROL__ =" not in urllib.request.urlopen(url).read().decode()
         assert _post(f"http://127.0.0.1:{d.port}/", {"minutes": 10}, token=d.token)[0] == 403
         d.update({"symbol": "NVDA"})
-        assert "window.__CONTROL__ =" not in d.snapshot(tmp_path / "s.html").read_text()
+        assert "window.__CONTROL__ =" not in d.snapshot(tmp_path / "s.html").read_text(encoding="utf-8")
     finally:
         d.stop()
 

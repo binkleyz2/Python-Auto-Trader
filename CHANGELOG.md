@@ -1,8 +1,16 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.4.1 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.4.2 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.4.2 – 2026-10-22
+
+- **Files are read and written as UTF-8 everywhere.** On Windows, Python otherwise uses the old cp1252
+  encoding, so two tests failed when reading back the dashboard snapshot (it contains characters such as
+  "…"). The bot itself had the same weakness when reading `config.yaml`: a character like "–" or "…" in
+  a comment could have stopped it at startup. `config.yaml` saved by Notepad with a byte-order mark also
+  works now.
 
 ## v1.4.1 – 2026-10-22
 

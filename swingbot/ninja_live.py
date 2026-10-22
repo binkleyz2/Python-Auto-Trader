@@ -290,10 +290,10 @@ def make_ninja_client(cfg: Config, workdir: Path) -> NinjaClient:
         sys.exit(f"Set {', '.join(missing)} in .env (see .env.example).")
     dev_file = workdir / ".ninja_device_id"                 # a stable id for this PC (NinjaTrader requires one)
     if dev_file.exists():
-        device = dev_file.read_text().strip()
+        device = dev_file.read_text(encoding="utf-8").strip()
     else:
         device = str(uuid.uuid4())
-        dev_file.write_text(device)
+        dev_file.write_text(device, encoding="utf-8")
     c = NinjaClient(os.environ["NINJA_USERNAME"], os.environ["NINJA_PASSWORD"], os.environ["NINJA_CID"],
                     os.environ["NINJA_SECRET"], env=cfg.ninja_env, device_id=device)
     c.login()

@@ -42,12 +42,12 @@ def test_sp500_from_ishares(tmp_path, monkeypatch):
     iw.main(["sp500", "--file", "ivv.csv", "--min-price", "10"])
     syms = read_watchlist(tmp_path / "watchlist_sp500.yaml")
     assert syms == ["BRK.B", "NVDA"]                                   # BRKB fixed; BF.B under $10; cash out
-    assert "Oct 21, 2026" in (tmp_path / "watchlist_sp500.yaml").read_text()
+    assert "Oct 21, 2026" in (tmp_path / "watchlist_sp500.yaml").read_text(encoding="utf-8")
 
 
 def test_nasdaq_composite_common_stocks_only(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "n.txt").write_text(NASDAQ_TXT)
+    (tmp_path / "n.txt").write_text(NASDAQ_TXT, encoding="utf-8")
     iw.main(["nasdaq", "--file", "n.txt", "--top", "5"])                  # --top is ignored (no weights)
     assert read_watchlist(tmp_path / "watchlist_nasdaq.yaml") == ["AACI", "AAPL", "ASML"]
 
