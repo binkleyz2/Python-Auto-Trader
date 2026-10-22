@@ -1,0 +1,50 @@
+# Publishes a GitHub release for every version in CHANGELOG.md that doesn't have one yet.
+# The current version (swingbot/__init__.py) is tagged on the commit that was pushed; earlier
+# versions use the commits listed in KNOWN below. Release notes come from CHANGELOG.md.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [CHANGELOG.md, swingbot/__init__.py]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create missing releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import re, subprocess, json, os
+          KNOWN = {"v1.0.0": "e41c946", "v1.1.0": "4c76e25", "v1.2.0": "dbd7bb2"}
+          cur = "v" + re.search(r'__version__\s*=\s*"([^"]+)"', open("swingbot/__init__.py").read()).group(1)
+          text = open("CHANGELOG.md").read()
+          existing = set(subprocess.run(["gh", "release", "list", "--limit", "200", "--json", "tagName",
+                                         "--jq", ".[].tagName"], capture_output=True, text=True).stdout.split())
+          parts = re.split(r"^## ", text, flags=re.M)[1:]
+          for p in reversed(parts):                      # oldest first
+              head, body = p.split("\n", 1)
+              tag = head.split()[0]
+              if tag in existing:
+                  continue
+              target = os.environ["GITHUB_SHA"] if tag == cur else KNOWN.get(tag)
+              if not target:
+                  print(f"skip {tag}: no commit known for it"); continue
+              sha = subprocess.check_output(["git", "rev-parse", target + "^{commit}"], text=True).strip()
+              open("notes.md", "w").write(body.strip() + "\n")
+              args = ["gh", "release", "create", tag, "--target", sha, "--title", head.replace("–", "-").strip(),
+                      "--notes-file", "notes.md"]
+              if tag != cur:
+                  args.append("--latest=false")
+              subprocess.run(args, check=True)
+              print("released", tag, sha[:7])
+          PY
