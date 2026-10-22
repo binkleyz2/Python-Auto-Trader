@@ -160,10 +160,14 @@ def main(argv=None) -> None:
         bot.forced_symbol = args.symbol.upper() if args.symbol else None
         dash = _start_dashboard(cfg, bot)
         try:
-            if is_weekday(bot):
-                bot.prepare()                    # scan now (yesterday's data), so the pick is ready at the open
-                if bot.symbol and wait_for_open(bot):
-                    bot.run_session()
+            try:
+                if is_weekday(bot):
+                    bot.prepare()                # scan now (yesterday's data), so the pick is ready at the open
+                    if bot.symbol and wait_for_open(bot):
+                        bot.run_session()
+            except Exception as e:               # into the log file too, not just the console
+                logging.getLogger("swingbot").exception("The bot stopped on an error: %s", e)
+                raise
         finally:
             if dash:
                 from datetime import date

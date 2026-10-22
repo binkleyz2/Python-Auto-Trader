@@ -330,3 +330,55 @@ def test_bot_follows_a_stop_raised_by_hand(tmp_path, monkeypatch):
     t.replace_order_by_id(t.open_stops()[0].id, SimpleNamespace(stop_price=49.70))   # lowered by hand
     bot.sync_stop_from_broker()
     assert bot.pos["stop"] == 49.90                                        # the bot's own level stands
+
+
+class SlowCancelTrading(FakeTrading):
+    """Like 2026-10-22 on the paper account: cancelled legs sit in 'pending_cancel' for a while, the second
+    leg's cancel errors, and a sell is refused while shares are still held by those orders."""
+
+    def __init__(self, *a, pending_polls=40, **k):
+        super().__init__(*a, **k)
+        self.pending_polls, self.sell_refusals = pending_polls, 0
+
+    def cancel_order_by_id(self, oid):
+        o = self.all[str(oid)]
+        if o.status == "pending_cancel":
+            raise APIError(json.dumps({"code": 42210000, "message": "order pending cancel"}))
+        legs = o.parent.legs if o.parent else [o]
+        for leg in legs:
+            if leg.status in ("new", "held"):
+                leg.status = "pending_cancel"
+
+    def get_orders(self, req):
+        pend = [o for o in self.all.values() if o.status == "pending_cancel"]
+        if pend:
+            self.pending_polls -= 1
+            if self.pending_polls <= 0:
+                for o in pend:
+                    o.status = "canceled"
+        return super().get_orders(req)
+
+    def submit_order(self, req):
+        if _v(req.side) == "sell" and any(o.status == "pending_cancel" for o in self.all.values()):
+            self.sell_refusals += 1
+            raise APIError(json.dumps({"code": 40310000, "message": "insufficient qty available for order"}))
+        return super().submit_order(req)
+
+
+def test_flatten_survives_slow_cancels_and_refused_sells(tmp_path, monkeypatch):
+    """2026-10-22 LIVN: at 15:50 the sell was refused while the stop leg was still 'pending cancel'; the
+    error ended the session and 310 shares stayed open overnight with no stop."""
+    t = SlowCancelTrading(pending_polls=40)
+    bot, _ = _bot(tmp_path, monkeypatch, trading=t)
+    bot.enter(50.0, 49.0, "bounce")
+    bot.flatten("end of day")
+    assert t.pos["AAPL"] == 0 and bot.pos is None
+    assert t.sell_refusals >= 1                         # it was refused at least once, and retried
+
+
+def test_flatten_failure_never_raises_and_is_reported(tmp_path, monkeypatch):
+    t = SlowCancelTrading(pending_polls=10 ** 9)        # the cancels never finish
+    bot, _ = _bot(tmp_path, monkeypatch, trading=t)
+    bot.enter(50.0, 49.0, "bounce")
+    bot.flatten("end of day")                           # must not raise
+    assert t.pos["AAPL"] == 125 and bot.pos and bot.still_holding() == 125

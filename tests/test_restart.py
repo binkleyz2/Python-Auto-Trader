@@ -143,3 +143,18 @@ def test_paper_stop_in_missed_bars_counts(tmp_path, monkeypatch):
     assert b2.pos is None and b2.trades_today == 1
     exit_bar_x = b2.closed[-1]["exit_x"]
     assert exit_bar_x == live.x_of(pd.Timestamp(datetime(day.year, day.month, day.day, 10, 0, tzinfo=ET)), 5)
+
+
+def test_yesterdays_unsold_position_is_reported(tmp_path, monkeypatch):
+    """2026-10-22: LIVN was left open overnight. Next morning the bot must say so loudly."""
+    new_bot, t, clock = _setup(tmp_path, monkeypatch)
+    a = new_bot()
+    a.prepare()
+    clock["t"] = clock["t"].replace(hour=10)
+    a.enter(50.0, 49.0, "bounce")                       # bought, then never sold
+    clock["t"] = clock["t"] + pd.Timedelta(days=1)
+    b = new_bot()
+    b.prepare()
+    assert b.leftover and b.leftover["symbol"] == "AAPL" and b.leftover["shares"] == a.pos["shares"]
+    assert b.status()["leftover"]["date"] == str((clock["t"] - pd.Timedelta(days=1)).date())
+    assert b.pos is None                                # the bot doesn't adopt it

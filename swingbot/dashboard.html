@@ -655,6 +655,8 @@ function renderBanner(s) {
   else if (failing) msg = "Can't reach the bot – it may have stopped. Showing the last data received.";
   else if (s.epoch && !s.final && Date.now() / 1000 - s.epoch > 120)
     msg = `No update from the bot for ${Math.round((Date.now() / 1000 - s.epoch) / 60)} min – check that it's still running.`;
+  else if (s.not_flat) msg = `${s.not_flat.symbol}: ${s.not_flat.shares} shares could NOT be sold before the close and are still open with no stop. Close the position in your broker's app.`;
+  else if (s.leftover) msg = `${s.leftover.symbol}: ${s.leftover.shares} shares from ${s.leftover.date} are still open (the bot didn't sell them that day). The bot won't touch them - close them in your broker's app.`;
   else if (s.final) { msg = "Session finished."; info = true; }
   else if (s.stale) {
     msg = `No new ${s.stale.symbol} bar since ${s.stale.since} ET (${s.stale.minutes} min): ${s.stale.feed} has had no trades in it, ` +

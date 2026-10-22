@@ -123,6 +123,8 @@ class Bot:
         self.overrides: dict[str, float] = {}          # settings changed on the dashboard, for the rest of today
         self.pending_settings: dict[str, float] = {}
         self.bar_time: dict[str, pd.Timestamp] = {}    # start of each symbol's newest bar today
+        self.not_flat: dict | None = None              # end of day: shares the bot could not sell
+        self.leftover: dict | None = None              # a previous day's position that is still open
         self._stale_logged: set[str] = set()
         self.bm = int(cfg.bar_minutes)                 # bar size in minutes (1, 5, ...)
         self.forced_symbol: str | None = None          # set by `run --symbol X`: skip the scan, trade X
@@ -556,6 +558,36 @@ class Bot:
                      "LIVE" if self.live else "dry")
             return None
         return st
+
+    def _check_leftover(self) -> None:
+        """Warn loudly if a position from an earlier day (the bot failed to sell it) is still open.
+        The bot won't trade it: shares it didn't buy today count as yours."""
+        today = str(now_et().date())
+        files = sorted((self.workdir / "logs").glob("*-state.json"), reverse=True)
+        for f in files:
+            if f.name[:10] >= today:
+                continue
+            try:
+                st = json.loads(f.read_text())
+            except Exception:
+                return
+            p = st.get("pos")
+            if not p or st.get("broker") != self.broker_name or not st.get("live"):
+                return
+            sym, saved = st.get("symbol"), self.symbol
+            try:
+                self.symbol = sym
+                held = self.held_quantity()
+            except Exception:
+                held = 0
+            finally:
+                self.symbol = saved
+            if held > 0:
+                self.leftover = dict(symbol=sym, shares=min(held, int(p["shares"])), date=st.get("date"))
+                log.error("%s: %d shares from %s are STILL OPEN - the bot did not sell them that day. It "
+                          "won't trade them; close the position in your broker's app.", sym, self.leftover["shares"],
+                          st.get("date"))
+            return                                          # only the most recent earlier day matters
 
     def _restore_day(self, st: dict) -> None:
         self.start_equity = st.get("start_equity", self.start_equity)
@@ -1003,26 +1035,59 @@ class Bot:
             if self.pos:
                 self._close_pos(self.last_close, reason)
             return
-        for o in self._my_open_orders():                   # the bot's stop/target legs only
+        try:
+            self._flatten_live(reason)
+        except Exception as e:                             # never let a refusal end the session silently
+            log.exception("FLATTEN FAILED for %s (%s): %s", self.symbol, reason, e)
+
+    def _cancel_mine(self) -> None:
+        """Cancel the bot's open orders (stop / target legs, an unfilled sell) and wait until they're gone.
+        Cancelling one leg of a bracket cancels the other, so 'pending cancel' errors are expected."""
+        for o in self._my_open_orders():
             try:
                 self._cancel(o.id)
                 log.info("cancel requested for %s", o.id)
             except Exception as e:
-                log.error("cancel %s failed: %s", o.id, e)
-        for _ in range(10):                                # wait until they're gone
+                if "pending cancel" in str(e).lower() or "not cancelable" in str(e).lower():
+                    log.info("cancel %s: already being cancelled", o.id)
+                else:
+                    log.error("cancel %s failed: %s", o.id, e)
+        for _ in range(30):                                # paper accounts can take a while
             if not self._my_open_orders():
-                break
+                return
             _time.sleep(1)
-        qty = self.bot_shares()                            # only what the bot bought
-        if qty <= 0:
-            log.info("flatten (%s): bot holds no shares", reason)
-            self.pos = None
+        log.warning("some of the bot's orders were still open after 30 s")
+
+    def _flatten_live(self, reason: str) -> None:
+        last = None
+        for attempt in range(6):
+            self._cancel_mine()                            # also cancels an unfilled sell from a try before
+            qty = self.bot_shares()                        # only what the bot bought
+            if qty <= 0:
+                log.info("flatten (%s): bot holds no shares", reason)
+                if self.pos:                               # sold (by the stop or an earlier try): record it
+                    self._check_live_exit()
+                self.pos = None
+                return
+            try:
+                oid, price = self._market_sell(qty)
+            except Exception as e:                         # e.g. shares still held by a pending cancel
+                last = e
+                log.warning("sell %d %s refused (%s) - retrying in 5 s", qty, self.symbol, e)
+                _time.sleep(5)
+                continue
+            self.my_order_ids.add(oid)
+            log.info("FLATTEN (%s): sell %d %s, order %s", reason, qty, self.symbol, oid)
+            if price is not None:
+                self._close_pos(price, reason)
             return
-        oid, price = self._market_sell(qty)
-        self.my_order_ids.add(oid)
-        log.info("FLATTEN (%s): sell %d %s, order %s", reason, qty, self.symbol, oid)
-        if price is not None:
-            self._close_pos(price, reason)
+        raise RuntimeError(f"could not sell {self.symbol} after 6 tries: {last}")
+
+    def still_holding(self) -> int:
+        try:
+            return self.bot_shares() if (self.live and self.pos) else 0
+        except Exception:
+            return self.pos["shares"] if self.pos else 0
 
     def _check_live_exit(self) -> None:
         """Live: notice when the broker's stop (or target) has sold the bot's shares."""
@@ -1337,6 +1402,7 @@ class Bot:
             day_pnl=realized + unreal, trades_used=self.trades_today, max_trades=cfg.max_trades_per_day,
             halted=self.halted, spendable=spendable,
             scan=[dict(symbol=r.symbol, score=r.score, setup=r.setup, detail=r.detail) for r in self.scan_results[:50]],
+            not_flat=self.not_flat, leftover=self.leftover,
             settings=self._settings_rows(), settings_pending=sorted(self.pending_settings),
             stale=self._stale_status(), watch=self._watch_rows(), can_rescan=not self.pos and not self.final, rescan_pending=self.pending_rescan,
             views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
@@ -1405,6 +1471,8 @@ class Bot:
                 log.warning("account check failed: %s", e)
             if not st:
                 self.snapshot_settled_cash()
+        if self.live:
+            self._check_leftover()
         if st:
             self._restore_day(st)
             if self.live and self.settled_start is not None:
@@ -1466,6 +1534,16 @@ class Bot:
                 return
             if now.time() >= flatten_at:
                 self.flatten("end of day")
+                while self.still_holding() > 0 and now_et().time() < time(15, 59, 30):
+                    log.error("%s: %d shares still held - trying to sell again", self.symbol, self.still_holding())
+                    self.publish(f"NOT FLAT - still trying to sell {self.symbol}")
+                    _time.sleep(20)
+                    self.flatten("end of day")
+                left = self.still_holding()
+                if left > 0:
+                    log.critical("COULD NOT SELL %d %s BEFORE THE CLOSE. It is still open with no stop - "
+                                 "close it in your broker's app.", left, self.symbol)
+                    self.not_flat = dict(symbol=self.symbol, shares=left)
                 log.info("Session done. Trades: %d, day P&L: %.2f", self.trades_today, self.day_pnl())
                 self.final = True
                 self.publish("Session finished")

@@ -1,8 +1,22 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.4.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.4.1 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.4.1 – 2026-10-22
+
+Fix: the 15:50 sale could fail and leave a position open overnight with no stop (LIVN, 310 shares, paper).
+
+- At 15:50 the bot cancels its stop and target legs, then sells. On Alpaca's paper account the stop leg sat
+  in "pending cancel" for more than 10 seconds, Alpaca refused the sale because the shares were still held
+  by that order, and the error ended the session without a sale.
+- Now the bot waits up to 30 s for the cancels, retries a refused sale (cancelling again first, so it can
+  never sell twice), and keeps trying until 15:59:30. If the shares still can't be sold, the log says so
+  as CRITICAL and the dashboard shows a red banner.
+- The next morning, a position the bot failed to sell on an earlier day is reported in the log and on the
+  dashboard. The bot won't trade those shares; close them yourself.
+- Errors that stop the bot are now written to the log file, not just the console.
 
 ## v1.4.0 – 2026-10-22
 
