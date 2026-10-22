@@ -115,6 +115,39 @@ def fetch_public(client, symbol: str, period: str = "WEEK", minutes: int = 5) ->
     return bars_from_public(resp)
 
 
+PUBLIC_SIZES = (1, 5, 10, 15, 30)
+
+
+def resample_bars(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+    """Combine 1-minute bars into ``minutes`` bars, counted from 9:30 each day (bar start times)."""
+    if df.empty or minutes == 1:
+        return df
+    out = []
+    for _, day in df.groupby(df.index.date):
+        out.append(day.resample(f"{minutes}min", origin="start_day", offset="30min", label="left", closed="left")
+                   .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+                   .dropna(subset=["close"]))
+    return normalize(pd.concat(out)) if out else empty_bars()
+
+
+def fetch_public_bars(client, symbol: str, period: str = "WEEK", minutes: int = 5) -> pd.DataFrame:
+    """Public bars of any size: 1, 5, 10, 15, 30 directly; 2 and 3 built from 1-minute bars."""
+    if minutes in PUBLIC_SIZES:
+        return fetch_public(client, symbol, period, minutes)
+    try:
+        one = fetch_public(client, symbol, period, 1)
+    except Exception as e:
+        raise RuntimeError(f"Public gave no 1-minute bars for {period} ({e}); {minutes}-minute bars are built "
+                           f"from them - use bar_minutes 1, 5, 10, 15 or 30") from e
+    return resample_bars(one, minutes)
+
+
+def public_last_price(client, symbol: str) -> float | None:
+    from public_api_sdk import InstrumentType, OrderInstrument
+    q = client.get_quotes([OrderInstrument(symbol=symbol, type=InstrumentType.EQUITY)])
+    return float(q[0].last) if q and getattr(q[0], "last", None) is not None else None
+
+
 # --------------------------------------------------------------------------- #
 # Synthetic data — for testing the code paths ONLY, not for judging the strategy
 # --------------------------------------------------------------------------- #

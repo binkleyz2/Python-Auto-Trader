@@ -13,8 +13,9 @@ A day-trading bot for Public.com or Alpaca (stocks) or NinjaTrader (futures) tha
 | Resistance line | Two confirmed swing highs, the second **lower**, with no close above the line before the current bar. |
 | Bounce entry | The bar dips to within 0.25 ATR of rising support, closes above the line, and closes green. |
 | Breakout entry | The bar closes 0.1 ATR or more above falling resistance after the prior bar was below it, on 1.2× average volume, and closes green. |
-| Initial stop | 0.25 ATR below the line, and at least 0.5 ATR below entry. Trades needing a stop wider than 3 ATR are skipped. Live entries are bracket orders, so the stop sits at Public from the moment the buy fills. |
-| Trailing stop | After each 5-minute bar, the newest confirmed swing low since the entry signal sets a new stop 0.25 ATR below its low. The stop only moves up, never to or above the current price, and only if it rises at least 0.1 ATR. Live, the existing stop order is repriced in one step (cancel-and-replace), so a stop is always in place. If Public refuses a change, the old stop stays and the bot retries next bar. |
+| Initial stop | 0.25 ATR below the line, and at least 0.5 ATR and at least 0.25% (`min_stop_pct`) below entry. Trades whose line-based stop is wider than 3 ATR are skipped. If the price has already fallen to the stop when the order is about to go out, the trade is skipped. Live entries are bracket orders, so the stop sits at Public from the moment the buy fills. |
+| Trailing stop | After each 5-minute bar, the newest confirmed swing low since the entry signal sets a new stop 0.25 ATR below its low. The stop only moves up, never closer than 0.25% below the current price, and only if it rises at least 0.1 ATR. Live, the existing stop order is repriced in one step (cancel-and-replace), so a stop is always in place. If Public refuses a change, the old stop stays and the bot retries next bar. |
+| Breakeven | Once a bar closes 1R above the entry (1R = entry minus initial stop; `breakeven_at_r`), the stop moves up to the entry price, so the trade can no longer become a loss. Swing-low trailing continues from there. `breakeven_at_r: 0` turns it off. |
 | Target | None by default: winners run until the trailing stop or the 15:50 sell-off. Set `use_target: true` to also take profit at 2× the risk. |
 | Time | Entries only between 9:45 and 15:30 ET. Everything is sold at 15:50. |
 | Risk | 0.5% of equity at risk per trade, no position over 25% of equity or 98% of current cash buying power (checked right before each live order), at most 2 trades a day, and no new trades after a 1.5% daily loss. |
@@ -70,6 +71,14 @@ Nothing on the page can place, change or cancel orders. It is reachable from thi
 
 **Kill switch:** create a file named `STOP` in the folder. Within 5 minutes the bot cancels its orders, sells its position, and exits.
 
+## Watching several stocks, and rescanning
+
+The morning scan ranks the watchlist and the bot watches the best `watch_count` (default 5) for entries, not just the top one. At each bar close it checks every watched symbol and trades the first that signals, best-ranked first if two signal on the same bar. Still only one position at a time and at most `max_trades_per_day`: while a trade is open only that stock is followed, and the others resume once it closes. `watch_count: 1` gives the old single-pick behaviour, and `--symbol X` watches only X.
+
+The dashboard's **Watching** table lists them with their morning rank, last price and where price sits against its nearest line now. Click a row, or use the **Chart** dropdown, to chart another watched symbol; that choice is per browser and changes nothing in the bot.
+
+**Rescan** (button next to Bars, on the PC running the bot) ranks the whole watchlist again including today's bars so far, and the bot then watches the new best setups. It works only when not in a trade, takes about as long as the morning scan, and is logged. The first check afterwards only redraws; entries resume from the next completed bar.
+
 ## Large watchlists (S&P 100, Russell 2000)
 
 The morning scan downloads `scan_workers` symbols at once (default 10). Alpaca goes further and fetches 100 symbols per request, so even 2,000 symbols take only a few dozen requests. A symbol that fails (delisted, or a ticker your broker writes differently) is logged and skipped; the rest carry on. The log reports how long the download took ("Scan data: 1987 of 2000 symbols in 74 s"), and the dashboard shows progress. The log and dashboard list the 25 and 50 best-ranked symbols, not all of them.
@@ -110,6 +119,17 @@ How it differs from Public:
 - **Market data.** The free plan's live bars come from one exchange (IEX), which carries a small share of each stock's trading, so bars are thinner and some quiet 5-minute periods have no bar. The morning volume screen uses full-market volume (the free plan allows it for past days). For real money, consider Alpaca's paid full-market data and set `alpaca_feed: sip`.
 - **Your own orders.** Alpaca rejects an order that could trade against one of your own open orders in the same stock. If you have your own order open on the stock the bot picks, the bot's order may be rejected (it shows in the log, and nothing is bought).
 - **Margin accounts.** Alpaca accounts, including paper ones, are usually margin accounts. The bot still only spends cash (`use_margin: false`). To make the account itself cash-only, set its maximum margin multiplier to 1 in Alpaca's account settings.
+
+### Alpaca orders with Public's price data
+
+Alpaca's free data comes from one exchange (IEX). For smaller stocks that can mean minutes with no trades, so no bars, stalled charts and weak signals. With an Alpaca account for orders (paper or real) and a Public account for prices, set:
+
+```yaml
+broker: alpaca
+price_data: public      # bars and quotes from Public.com; orders, positions and cash stay at Alpaca
+```
+
+Both sets of keys go in `.env` (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `PUBLIC_API_SECRET_KEY`, `PUBLIC_ACCOUNT_ID`). Public offers 1, 5, 10, 15 and 30-minute bars; 2 and 3-minute bars are built from its 1-minute bars. The scan downloads `scan_workers` symbols at once from Public, and the volume filter uses Public's bar volume. `price_data: broker` goes back to Alpaca's own feed.
 
 ## Using NinjaTrader for futures
 
@@ -165,7 +185,9 @@ On Windows, use Task Scheduler. Only add `--live --yes` once you trust the dry r
 
 - **Day-trading rules.** FINRA's pattern-day-trader rule and its $25,000 minimum were eliminated effective June 4, 2026. Brokers have until October 2027 to update their systems, so check Public's current policy. With `settled_cash_only: true` (the default), the bot buys only with settled cash, which avoids good-faith violations. In practice, after one round trip it usually can't make a second trade the same day, because that sale's proceeds don't settle until the next business day.
 - **Your own shares are safe.** If you already own the stock the bot picks, the bot records how many you had before it bought. It only ever sells the shares it bought, and only cancels orders it created.
-- **If the bot stops running mid-trade** (PC sleeps, crash), the last stop it set stays at Public and still protects the position, but it won't trail further or sell at 15:50. Check the account if that happens.
+- **If the bot stops running mid-trade** (PC sleeps, crash), the last stop it set stays at the broker and still protects the position, but nothing trails it or sells at 15:50 until the bot runs again. Alpaca and NinjaTrader stops are day orders and expire at the close, so don't leave it stopped overnight.
+- **Raising the stop by hand.** You can raise the bot's stop order yourself in Public's or Alpaca's app. At the next bar the bot notices the higher stop, adopts it ("Stop for BOOT is 114.23 at the broker … the bot now uses 114.23"), and from then on only moves it higher. It never lowers a stop you raised. A stop you lower by hand is left alone until the bot's next raise. (Not yet for NinjaTrader.)
+- **Restarting during the day is safe.** The bot saves its day to `logs/<date>-state.json` after every check. Started again the same day, in the same mode (live or dry run) and with the same broker, it carries on: same trade count, same daily-loss baseline, same settled cash (sale proceeds still aren't reused), and the trades so far on the dashboard. An open position is taken over again: the bot trades that symbol, recognises its own stop, keeps trailing it and sells at 15:50. If the stop fired while the bot was off, that exit is recorded. A file from another day or mode is ignored. Deleting the file makes the next start a fresh day (trade count back to 0).
 - **The daily loss limit** in live mode compares total account value to the morning's value. Other holdings moving can trip it.
 - **Bar timestamps.** The bot assumes Public's bar timestamps mark the bar's start. In dry run, check `logs/` to confirm that signals line up with your chart.
 - **Not advice.** This is a tool that carries out your rules. Trend-line trading is discretionary in practice, and these are just one mechanical version of it.

@@ -280,3 +280,52 @@ def test_alpaca_requests_one_minute_bars(tmp_path, monkeypatch):
     bot.client.data.df = synthetic("AAPL", days=3, minutes=1)
     bot.fetch_bars("AAPL", "WEEK")
     assert seen == ["1Min"]
+
+
+def test_entry_skipped_when_price_already_fell_to_the_stop(tmp_path, monkeypatch):
+    """2026-10-20: signal close 27.52, stop 27.50, but the price was 27.495 when the order went out;
+    Alpaca refused the bracket. Now the bot checks the price first and skips the trade."""
+    bot, t = _bot(tmp_path, monkeypatch)
+    monkeypatch.setattr(bot, "_last_trade_price", lambda: 49.005)
+    bot.enter(50.0, 49.0, "breakout")
+    assert t.sent == [] and bot.pos is None and bot.trades_today == 0
+
+
+def test_refused_entry_is_not_counted_and_bot_carries_on(tmp_path, monkeypatch):
+    bot, t = _bot(tmp_path, monkeypatch)
+
+    def refuse(req):
+        raise RuntimeError('{"code":42210000,"message":"stop_loss.stop_price must be <= base_price - 0.01"}')
+    monkeypatch.setattr(t, "submit_order", refuse)
+    bot.enter(50.0, 49.0, "breakout")                         # must not raise
+    assert bot.pos is None and bot.trades_today == 0
+
+
+def test_entry_error_after_the_order_went_through_adopts_the_shares(tmp_path, monkeypatch):
+    bot, t = _bot(tmp_path, monkeypatch)
+    real = t.submit_order
+
+    def timeout_after_send(req):
+        real(req)
+        raise TimeoutError("read timed out")
+    monkeypatch.setattr(t, "submit_order", timeout_after_send)
+    bot.enter(50.0, 49.0, "bounce")
+    assert bot.pos and bot.pos["shares"] == 125 and bot.trades_today == 1
+    assert len(t.open_stops()) == 1                           # still protected by the bracket's stop
+
+
+def test_bot_follows_a_stop_raised_by_hand(tmp_path, monkeypatch):
+    """2026-10-21: the stop was raised by hand in Alpaca's app. The bot must adopt it and never lower it."""
+    bot, t = _bot(tmp_path, monkeypatch)
+    bot.enter(50.0, 49.0, "bounce")
+    leg = t.open_stops()[0]
+    t.replace_order_by_id(leg.id, SimpleNamespace(stop_price=49.80))       # you, in Alpaca's app
+    bot.sync_stop_from_broker()
+    assert bot.pos["stop"] == 49.80 and bot.pos["stop_steps"][-1][1] == 49.80
+    bot.raise_stop(49.50)                                                  # a lower swing-low stop: ignored
+    assert [float(o.stop_price) for o in t.open_stops()] == [49.80]
+    bot.raise_stop(49.90)                                                  # higher: the bot moves it
+    assert [float(o.stop_price) for o in t.open_stops()] == [49.90] and bot.pos["stop"] == 49.90
+    t.replace_order_by_id(t.open_stops()[0].id, SimpleNamespace(stop_price=49.70))   # lowered by hand
+    bot.sync_stop_from_broker()
+    assert bot.pos["stop"] == 49.90                                        # the bot's own level stands

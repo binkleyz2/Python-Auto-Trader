@@ -351,10 +351,10 @@ class NinjaBot(Bot):
                 log.warning("%s: could not look up the contract (%s) - skipped", name, e)
         return keep
 
-    def morning_scan(self) -> None:
-        super().morning_scan()
-        if self.symbol:
-            self._load_contract(self.symbol)
+    def _on_activate(self, sym: str) -> None:
+        # contract size and tick for the symbol the bot is about to chart / trade
+        if getattr(self, "contract", None) is None or self.contract.get("name") != sym:
+            self._load_contract(sym)
 
     def _load_contract(self, name: str) -> None:
         c = self.client.get("/contract/find", name=name)
@@ -397,6 +397,18 @@ class NinjaBot(Bot):
         return (ticks * self.tick).normalize()
 
     # ------------------------------------------------------------ data
+    def _extra_state(self):
+        return {"meta": self._meta}
+
+    def _restore_extra(self, extra):
+        self._meta.update(extra.get("meta") or {})
+
+    def _stop_price_of(self, order):
+        return None          # NinjaTrader: not read back yet (a hand-raised stop there isn't followed)
+
+    def _tick(self):
+        return self.tick
+
     def fetch_many(self, symbols, period):
         # one market-data connection at a time: NinjaTrader allows only two sessions per user
         out = {}

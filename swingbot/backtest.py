@@ -10,7 +10,7 @@ import pandas as pd
 
 from .config import Config
 from .scanner import pick
-from .strategy import add_indicators, find_swings, signal_at, target_for, trailing_stop
+from .strategy import add_indicators, breakeven_stop, find_swings, signal_at, target_for, trailing_stop
 
 
 def _t(s: str) -> time:
@@ -102,6 +102,8 @@ def simulate_day(sym: str, d: pd.DataFrame, is_low, is_high, day_idx: np.ndarray
         # 3) close of bar t: raise the trailing stop (takes effect from the next bar)
         if pos is not None and cfg.trail_stop:
             pos["stop"] = trailing_stop(d, t, cfg, is_low, pos["from_bar"], pos["stop"])
+        if pos is not None:
+            pos["stop"] = breakeven_stop(pos["entry"], pos["init_stop"], float(bar["close"]), pos["stop"], cfg)
 
         # 4) close of bar t: look for a new signal
         if (pos is None and first_entry <= bt <= last_entry

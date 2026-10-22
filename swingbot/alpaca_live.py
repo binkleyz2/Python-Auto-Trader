@@ -46,11 +46,16 @@ def _v(x) -> str:
 class AlpacaClients:
     """The two Alpaca connections the bot needs: trading (orders, account) and market data."""
 
-    def __init__(self, trading, data, feed: str = "iex", paper: bool = True):
+    def __init__(self, trading, data, feed: str = "iex", paper: bool = True, public=None):
         self.trading, self.data, self.feed, self.paper = trading, data, feed.lower(), paper
+        self.public = public                      # a Public.com client when price_data: public
 
     def close(self) -> None:
-        pass
+        if self.public is not None:
+            try:
+                self.public.close()
+            except Exception:
+                pass
 
 
 def make_alpaca_client(cfg: Config) -> AlpacaClients:
@@ -60,12 +65,27 @@ def make_alpaca_client(cfg: Config) -> AlpacaClients:
     secret = os.environ.get("ALPACA_SECRET_KEY")
     if not key or not secret:
         sys.exit("Set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env (see .env.example).")
+    public = None
+    if cfg.price_data == "public":
+        from .live import make_client
+        public = make_client()                    # needs PUBLIC_API_SECRET_KEY and PUBLIC_ACCOUNT_ID in .env
     return AlpacaClients(TradingClient(key, secret, paper=cfg.alpaca_paper),
-                         StockHistoricalDataClient(key, secret), cfg.alpaca_feed, cfg.alpaca_paper)
+                         StockHistoricalDataClient(key, secret), cfg.alpaca_feed, cfg.alpaca_paper, public)
 
 
 class AlpacaBot(Bot):
     broker_name = "Alpaca"
+
+    @property
+    def data_feed_note(self) -> str:
+        if self.client.public is not None:
+            return "Public's price data"
+        return "Alpaca's free IEX feed (one exchange)" if self.client.feed != "sip" else "Alpaca's data feed"
+
+    # price_data: public - bars and quotes come from Public.com, orders still go to Alpaca
+    def _public_bars(self, symbol: str, period: str) -> pd.DataFrame:
+        from .data import fetch_public_bars
+        return fetch_public_bars(self.client.public, symbol, period, self.bm)
 
     # ------------------------------------------------------------------ data
     def _feed(self, sip: bool = False):
@@ -95,12 +115,16 @@ class AlpacaBot(Bot):
         return normalize(df)
 
     def fetch_bars(self, symbol: str, period: str) -> pd.DataFrame:
+        if self.client.public is not None:
+            return self._public_bars(symbol, period)
         return self._one(self._bars_df(symbol, period), symbol)
 
     BATCH = 100                                           # symbols per bars request
 
     def fetch_many(self, symbols: list[str], period: str) -> dict[str, pd.DataFrame]:
         """Alpaca returns many symbols per request: 100 per request, scan_workers requests at once."""
+        if self.client.public is not None:
+            return Bot.fetch_many(self, symbols, period)      # Public: one symbol per request, in parallel
         symbols = list(dict.fromkeys(symbols))
         chunks = [symbols[i:i + self.BATCH] for i in range(0, len(symbols), self.BATCH)]
         got: dict[str, pd.DataFrame] = {}
@@ -126,8 +150,8 @@ class AlpacaBot(Bot):
     def liquidity(self, symbols: list[str]) -> dict | None:
         """Full-market average daily dollar volume (last 5 sessions). Only needed on the free IEX feed,
         whose volume is a small slice of the real total."""
-        if self.client.feed == "sip" or not symbols:
-            return None
+        if self.client.feed == "sip" or self.client.public is not None or not symbols:
+            return None                                       # the bars already carry full-market volume
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame
         now = now_et()
@@ -156,6 +180,9 @@ class AlpacaBot(Bot):
         return out
 
     def _last_trade_price(self) -> float | None:
+        if self.client.public is not None:
+            from .data import public_last_price
+            return public_last_price(self.client.public, self.symbol)
         from alpaca.data.requests import StockLatestTradeRequest
         res = self.client.data.get_stock_latest_trade(
             StockLatestTradeRequest(symbol_or_symbols=self.symbol, feed=self._feed()))

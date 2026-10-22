@@ -1,0 +1,11 @@
+# secrets and per-machine files - never commit
+.env
+.ninja_device_id
+# the bot's daily output
+logs/
+trades.csv
+*-state.json
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

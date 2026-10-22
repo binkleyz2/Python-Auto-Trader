@@ -180,6 +180,7 @@ def signal_at(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray, is_high
             if touched and held and bullish:
                 stop = min(lv - cfg.stop_buffer_atr * atr, c - cfg.min_stop_atr * atr)
                 if 0 < c - stop <= cfg.max_stop_atr * atr:
+                    stop = min(stop, min_stop_price(c, cfg))
                     return Signal("bounce", t, sup, lv, stop, c)
 
     # --- Breakout through a falling resistance line -----------------------
@@ -198,8 +199,26 @@ def signal_at(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray, is_high
             if broke and fresh and vol_ok and c > o:
                 stop = min(lv - cfg.stop_buffer_atr * atr, c - cfg.min_stop_atr * atr)
                 if 0 < c - stop <= cfg.max_stop_atr * atr:
+                    stop = min(stop, min_stop_price(c, cfg))
                     return Signal("breakout", t, res, lv, stop, c)
     return None
+
+
+def min_stop_price(price: float, cfg: Config) -> float:
+    """Highest stop allowed: at least min_stop_pct below the price. Keeps stops on short bars (tiny ATR)
+    from sitting inside the bid-ask spread. The max_stop_atr limit is checked before this floor."""
+    return price * (1 - cfg.min_stop_pct / 100)
+
+
+def breakeven_stop(entry: float, init_stop: float, close: float, current_stop: float, cfg: Config) -> float:
+    """Once a bar closes ``breakeven_at_r`` x the initial risk above the entry, lift the stop to the
+    entry price, so the trade can no longer turn into a loss. Never lowers the stop, and never puts it
+    closer than min_stop_pct under the price. 0 turns it off."""
+    r = cfg.breakeven_at_r
+    risk = entry - init_stop
+    if r <= 0 or risk <= 0 or current_stop >= entry or close < entry + r * risk:
+        return current_stop
+    return max(current_stop, min(entry, min_stop_price(close, cfg)))
 
 
 def target_for(entry: float, stop: float, cfg: Config) -> float:
@@ -213,7 +232,7 @@ def trailing_stop(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray,
     Looks at swing lows from ``from_bar`` (the signal bar) onward that are
     confirmed by bar ``t`` (i.e. at index <= t - swing_n). The newest one sets a
     candidate stop just below its low. The stop only ever moves up, and never to
-    a level at or above the current close.
+    a level at or above the current close, nor closer than ``min_stop_pct`` below it.
     """
     last = t - cfg.swing_n
     if last < from_bar:
@@ -227,6 +246,7 @@ def trailing_stop(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray,
     candidate = df["low"].iat[from_bar + idx[-1]] - cfg.stop_buffer_atr * atr
     if candidate >= df["close"].iat[t]:
         return current_stop
+    candidate = min(candidate, min_stop_price(df["close"].iat[t], cfg))   # never trail closer than min_stop_pct
     if candidate - current_stop < cfg.trail_min_step_atr * atr:     # skip tiny moves (fewer order changes)
         return current_stop
     return candidate

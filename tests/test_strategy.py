@@ -115,3 +115,63 @@ def test_trailing_stop_no_lookahead(df, cfg):
         cut = add_indicators(df.iloc[: t + 1], cfg)
         lo_c, _ = find_swings(cut, cfg.swing_n)
         assert a == pytest.approx(trailing_stop(cut, t, cfg, lo_c, t - 60, 0.0))
+
+
+def test_min_stop_pct_floor_on_entries_and_trailing():
+    """2026-10-20: on 2-minute bars a tiny ATR put the stop 2 cents under a $27.52 entry.
+    min_stop_pct keeps it at least 0.25% (about 7 cents) away."""
+    import numpy as np
+    from swingbot.strategy import min_stop_price, trailing_stop
+    cfg = Config(min_stop_pct=0.25)
+    assert min_stop_price(27.52, cfg) == pytest.approx(27.4512)
+    assert min_stop_price(27.52, Config(min_stop_pct=0)) == 27.52
+    # trailing: a swing low right under the price can't pull the stop inside the floor
+    n = 30
+    df = pd.DataFrame({"open": 100.0, "high": 100.1, "low": 99.99, "close": 100.0, "volume": 1.0,
+                       "atr": 0.01}, index=range(n))
+    is_low = np.zeros(n, bool)
+    is_low[10] = True
+    new = trailing_stop(df, 20, cfg, is_low, 0, current_stop=99.0)
+    assert new == pytest.approx(99.75)                     # 0.25% under 100, not 99.9875
+    with pytest.raises(ValueError):
+        Config(min_stop_pct=-1).validate()
+
+
+def test_breakeven_stop():
+    """2026-10-21 BOOT: in at 114.23, stop 112.59 (1R = 1.64). Past 115.87 the stop goes to the entry."""
+    from swingbot.strategy import breakeven_stop
+    cfg = Config(breakeven_at_r=1.0)
+    assert breakeven_stop(114.23, 112.59, 115.80, 112.59, cfg) == 112.59     # not yet 1R up
+    assert breakeven_stop(114.23, 112.59, 116.03, 112.59, cfg) == 114.23     # 1.1R up: to the entry
+    assert breakeven_stop(114.23, 112.59, 116.03, 115.00, cfg) == 115.00     # never lowers a trailed stop
+    assert breakeven_stop(114.23, 112.59, 116.03, 112.59, Config(breakeven_at_r=0)) == 112.59
+    # a tiny risk: entry would sit inside min_stop_pct of the price - keep that distance instead
+    assert breakeven_stop(100.0, 99.5, 100.6, 99.5, Config(breakeven_at_r=1.0, min_stop_pct=1.0)) == pytest.approx(100.6 * 0.99)
+
+
+def test_breakeven_in_the_live_loop(tmp_path, monkeypatch):
+    from swingbot import live
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from types import SimpleNamespace
+    df = synthetic("AAA", days=3)
+    day = sorted(set(df.index.date))[-1]
+    clock = {"t": datetime(day.year, day.month, day.day, 11, 1, tzinfo=ZoneInfo("America/New_York"))}
+
+    class C:
+        def get_bars(self, symbol, period, aggregation=None, **kw):
+            d = df[df.index < pd.Timestamp(clock["t"])]
+            if period.name == "DAY":
+                d = d[d.index.date == day]
+            return SimpleNamespace(regular_market=SimpleNamespace(bars=[SimpleNamespace(
+                timestamp=ts.isoformat(), open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume)
+                for ts, r in d.iterrows()]))
+    monkeypatch.setattr(live, "now_et", lambda: clock["t"])
+    bot = live.Bot(C(), Config(trail_stop=False), live=False, workdir=tmp_path)
+    bot.symbol, bot.history = "AAA", df[df.index.date < day]
+    close = float(df[df.index < pd.Timestamp(clock["t"])].close.iat[-1])
+    entry = close - 1.5                                   # price is 1.5R above an entry with 1.00 of risk
+    bot.pos = dict(kind="bounce", entry=entry, init_stop=entry - 1.0, stop=entry - 1.0, target=None, shares=10,
+                   signal_ts=None, entry_x=0.0, entry_clock="10:00", stop_steps=[[0.0, entry - 1.0]])
+    bot.step()
+    assert bot.pos["stop"] == pytest.approx(entry, abs=0.01) and len(bot.pos["stop_steps"]) == 2

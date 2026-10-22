@@ -48,7 +48,8 @@ def _start_dashboard(cfg, bot):
         dash = Dashboard(cfg.dashboard_port, lan=cfg.dashboard_lan, key=cfg.dashboard_key,
                          lan_control=cfg.dashboard_lan_control)
         if cfg.dashboard_bar_control:
-            dash.on_bar_size = bot.request_bar_size     # the page's one control: bar size, never orders
+            dash.on_bar_size = bot.request_bar_size     # the page's controls: bar size and rescan, never orders
+            dash.on_rescan = bot.request_rescan
         url = dash.start()
         if not url:
             logging.getLogger("swingbot").warning("Dashboard: no free port near %d - running without it.",

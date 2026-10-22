@@ -10,6 +10,7 @@ its open orders, sells its position and exits within one loop.
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import math
 import os
@@ -30,8 +31,8 @@ import pandas as pd
 from .backtest import position_size
 from .config import Config
 from .data import fetch_public, normalize
-from .scanner import scan
-from .strategy import (add_indicators, find_swings, resistance_line, signal_at, support_line, target_for,
+from .scanner import avg_dollar_volume, scan
+from .strategy import (add_indicators, breakeven_stop, find_swings, resistance_line, signal_at, support_line, target_for,
                        trailing_stop)
 
 ET = ZoneInfo("America/New_York")
@@ -110,7 +111,14 @@ class Bot:
         self.live = live
         self.workdir = workdir
         self.symbol: str | None = None
-        self.history: pd.DataFrame | None = None     # prior-days bars for the picked symbol
+        self.history: pd.DataFrame | None = None     # prior-days bars for the active symbol
+        self.watch: list[str] = []                     # symbols watched for entries, best-ranked first
+        self.histories: dict[str, pd.DataFrame] = {}   # prior-days bars for each watched symbol
+        self.views: dict[str, dict] = {}               # chart data per watched symbol (dashboard)
+        self.watch_info: dict[str, dict] = {}          # latest price / nearest line per watched symbol
+        self.pending_rescan = False                    # "Rescan" pressed on the dashboard
+        self.bar_time: dict[str, pd.Timestamp] = {}    # start of each symbol's newest bar today
+        self._stale_logged: set[str] = set()
         self.bm = int(cfg.bar_minutes)                 # bar size in minutes (1, 5, ...)
         self.forced_symbol: str | None = None          # set by `run --symbol X`: skip the scan, trade X
         self.last_bar_seen: pd.Timestamp | None = None
@@ -157,8 +165,9 @@ class Bot:
         if self.forced_symbol:                         # `run --symbol X`: you picked it - no scan
             sym = self.forced_symbol
             df = self.fetch_bars(sym, "WEEK")
-            self.symbol = sym
-            self.history = df[df.index.date < today] if not df.empty else df
+            self.watch = [sym]
+            self.histories = {sym: df[df.index.date < today] if not df.empty else df}
+            self._activate(sym)
             self.pick_reason = f"chosen by you ({self.bm}-minute bars)"
             log.info("TODAY'S PICK: %s - chosen by you, %d-minute bars, scan skipped", sym, self.bm)
             return
@@ -175,17 +184,103 @@ class Bot:
             log.warning("liquidity check failed (%s); using bar volume", e)
             liq = None
         self.scan_results = scan(hist, scfg, dollar_volume=liq)
+        self._take_scan(hist, "TODAY'S PICK")
+
+    def _take_scan(self, hist: dict, label: str) -> bool:
+        """Watch the best-ranked symbols from self.scan_results. False if nothing has a setup."""
         for r in self.scan_results[:25]:                             # best 25 (the log stays readable)
             log.info("scan %-6s score=%.2f %-16s %s", r.symbol, r.score, r.setup, r.detail)
-        r0 = self.scan_results[0] if self.scan_results else None      # same as pick(), without scoring twice
-        choice = r0 if r0 is not None and r0.score > 0 else None
-        if not choice:
-            log.info("No symbol has a setup today. Nothing to trade.")
-            return
-        self.symbol = choice.symbol
-        self.history = hist[choice.symbol]
-        self.pick_reason = f"{choice.setup} - {choice.detail}"
-        log.info("TODAY'S PICK: %s (%s) - %s", choice.symbol, choice.setup, choice.detail)
+        good = [r for r in self.scan_results if r.score > 0][:max(1, int(self.cfg.watch_count))]
+        if not good:
+            log.info("No symbol has a setup. Nothing to trade.")
+            return False
+        today = now_et().date()
+        self.watch = [r.symbol for r in good]
+        self.histories = {r.symbol: hist[r.symbol][hist[r.symbol].index.date < today] for r in good}
+        self.watch_info = {}
+        self.views = {}
+        top = good[0]
+        if not self.pos:
+            self._activate(top.symbol)
+        self.pick_reason = f"{top.setup} - {top.detail}"
+        log.info("%s: %s (%s) - %s", label, top.symbol, top.setup, top.detail)
+        if len(self.watch) > 1:
+            log.info("Watching %d for entries, best first: %s", len(self.watch), ", ".join(self.watch))
+        return True
+
+    # ------------------------------------------------- several symbols at once
+    def _activate(self, sym: str) -> None:
+        """Make ``sym`` the symbol the bot charts, quotes and (on a signal) trades."""
+        self.symbol = sym
+        if sym in self.histories:
+            self.history = self.histories[sym]
+        self._on_activate(sym)
+
+    def _on_activate(self, sym: str) -> None:
+        pass                                           # NinjaTrader: load the contract's size and tick
+
+    def _watched(self) -> list[str]:
+        if self.pos:
+            return [self.symbol]                       # one position at a time: only it matters now
+        if self.watch:
+            return list(self.watch)
+        return [self.symbol] if self.symbol else []
+
+    def _hist(self, sym: str):
+        if sym in self.histories:
+            return self.histories[sym]
+        return self.history if sym == self.symbol else None
+
+    # ------------------------------------------------- rescan on demand
+    def request_rescan(self) -> str:
+        """Dashboard "Rescan" button (called from the dashboard thread): only queues it."""
+        if self.final:
+            raise ValueError("the session is over")
+        if self.pos:
+            raise ValueError("not while in a trade - the bot rescans only when flat")
+        self.pending_rescan = True
+        log.info("Dashboard: rescan requested")
+        return "Rescanning with today's prices..."
+
+    def rescan(self) -> bool:
+        """Rank the watchlist again, this time including today's completed bars, and watch the new
+        best symbols. Only when flat. Returns True if the watch list changed."""
+        self.pending_rescan = False
+        if self.pos:
+            log.info("Rescan skipped: in a trade")
+            return False
+        now = now_et()
+        scfg = self.scan_cfg()
+        self.publish(f"Rescanning {len(scfg.watchlist)} symbols")
+        t0 = _time.monotonic()
+        raw = self.fetch_many(scfg.watchlist, "WEEK")
+        hist, combined = {}, {}
+        for sym, df in raw.items():
+            if df.empty:
+                continue
+            hist[sym] = df[df.index.date < now.date()]
+            combined[sym] = complete_bars(df, now, self.bm)       # yesterday and before + today so far
+        log.info("Rescan data: %d of %d symbols in %.0f s", len(combined), len(scfg.watchlist),
+                 _time.monotonic() - t0)
+        try:
+            liq = self.liquidity(list(hist))
+        except Exception as e:
+            log.warning("liquidity check failed (%s); using bar volume", e)
+            liq = None
+        if not liq:                                    # judge volume on full days, not today's partial one
+            liq = {s: avg_dollar_volume(h) for s, h in hist.items() if len(h)}
+        old = list(self.watch)
+        results = scan(combined, scfg, dollar_volume=liq)
+        if not any(r.score > 0 for r in results):
+            log.info("Rescan found no setups - keeping the current watch list")
+            return False
+        self.scan_results = results
+        self.forced_symbol = None
+        self._take_scan(hist, f"RESCAN {now:%H:%M}")
+        self.pick_reason = f"rescan {now:%H:%M}: " + self.pick_reason
+        self.last_bar_seen = None
+        self._resync = True                            # next check redraws; entries resume from the next bar
+        return self.watch != old
 
     def _x(self, ts) -> float:
         return x_of(ts, self.bm)
@@ -241,6 +336,104 @@ class Bot:
         log.info("Dashboard: switch to %d-minute bars requested", minutes)
         return f"Switching to {minutes}-minute bars"
 
+    def _rescale(self, old: int, new: int) -> None:
+        """Chart positions are counted in bars: convert the ones already drawn to a new bar size."""
+        k = old / new
+        if self.pos:
+            p = self.pos
+            p["entry_x"] *= k
+            p["stop_steps"] = [[x * k, y] for x, y in p["stop_steps"]]
+            if p.get("signal_ts") is not None:
+                p["signal_ts"] = _bar_start(p["signal_ts"], new)
+        for c in self.closed:
+            c["entry_x"] *= k
+            c["exit_x"] *= k
+
+    # ------------------------------------------------- saved day (restarts)
+    # The bot writes its day to logs/<date>-state.json after every check, so a restart during the
+    # day carries on: same trade count, loss-limit baseline and settled cash, and any open
+    # position is taken over again (its stop keeps trailing, it is sold at 15:50).
+    def _state_path(self) -> Path:
+        return self.workdir / "logs" / f"{now_et().date()}-state.json"
+
+    def _extra_state(self) -> dict:
+        return {}                                      # broker-specific bits (NinjaTrader: order details)
+
+    def _restore_extra(self, extra: dict) -> None:
+        pass
+
+    def save_state(self) -> None:
+        if not self.prepared:
+            return                                     # never overwrite a saved day before reading it
+        try:
+            p = dict(self.pos) if self.pos else None
+            if p:
+                for k in ("signal_ts", "entry_time"):
+                    if p.get(k) is not None:
+                        p[k] = pd.Timestamp(p[k]).isoformat()
+            st = dict(version=1, date=str(now_et().date()), broker=self.broker_name, live=self.live,
+                      bar_minutes=self.bm, symbol=self.symbol, start_equity=self.start_equity,
+                      settled_start=self.settled_start, spent_today=self.spent_today,
+                      trades_today=self.trades_today, halted=self.halted, paper_pnl=self.paper_pnl,
+                      closed=self.closed, pos=p, my_order_ids=sorted(map(str, self.my_order_ids)),
+                      last_bar_seen=self.last_bar_seen.isoformat() if self.last_bar_seen is not None else None,
+                      extra=self._extra_state())
+            path = self._state_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(st, indent=1, default=str))
+            os.replace(tmp, path)                      # all or nothing, even if the PC dies mid-write
+        except Exception as e:
+            log.warning("could not save the day's state: %s", e)
+
+    def load_state(self) -> dict | None:
+        path = self._state_path()
+        if not path.exists():
+            return None
+        try:
+            st = json.loads(path.read_text())
+        except Exception as e:
+            log.warning("ignoring unreadable %s (%s)", path.name, e)
+            return None
+        if st.get("date") != str(now_et().date()):
+            return None
+        if st.get("broker") != self.broker_name or bool(st.get("live")) != self.live:
+            log.info("Saved session in %s is from a %s %s run - not resuming it in this %s %s run.",
+                     path.name, st.get("broker"), "LIVE" if st.get("live") else "dry", self.broker_name,
+                     "LIVE" if self.live else "dry")
+            return None
+        return st
+
+    def _restore_day(self, st: dict) -> None:
+        self.start_equity = st.get("start_equity", self.start_equity)
+        self.settled_start = st.get("settled_start")
+        self.spent_today = float(st.get("spent_today") or 0)
+        self.trades_today = int(st.get("trades_today") or 0)
+        self.halted = bool(st.get("halted"))
+        self.paper_pnl = float(st.get("paper_pnl") or 0)
+        self.closed = list(st.get("closed") or [])
+        log.info("Resuming today's session: %d trade(s) so far, day starts from equity %.2f%s",
+                 self.trades_today, self.start_equity or 0,
+                 ", loss limit already hit" if self.halted else "")
+
+    def _restore_position(self, st: dict) -> None:
+        p = dict(st["pos"])
+        for k in ("signal_ts", "entry_time"):
+            if p.get(k):
+                ts = pd.Timestamp(p[k])
+                p[k] = ts.tz_convert(ET) if k == "signal_ts" else ts.to_pydatetime()
+        self.pos = p
+        self.my_order_ids |= set(st.get("my_order_ids") or [])
+        self._restore_extra(st.get("extra") or {})
+        old = int(st.get("bar_minutes") or self.bm)
+        if old != self.bm:
+            self._rescale(old, self.bm)
+        elif st.get("last_bar_seen"):
+            self.last_bar_seen = pd.Timestamp(st["last_bar_seen"]).tz_convert(ET)
+        self.pick_reason = "resuming the open position"
+        log.info("Taking over the open position: %d %s %s from %.2f, stop %.2f",
+                 p["shares"], self.unit_label, self.symbol, p["entry"], p["stop"])
+
     def apply_pending_bar_size(self) -> bool:
         """Switch to a requested bar size. Keeps the open position and its stop as they are."""
         with self._bm_lock:
@@ -253,25 +446,20 @@ class Bot:
             log.info("Bar size now %d minutes", new)
             return True
         self.bm = new
+        syms = list(dict.fromkeys([self.symbol] + self.watch))
         try:
-            df = self.fetch_bars(self.symbol, "WEEK")
+            got = {self.symbol: self.fetch_bars(self.symbol, "WEEK")}
+            if len(syms) > 1:
+                got.update(self.fetch_many(syms[1:], "WEEK"))
         except Exception as e:
             self.bm = old
             log.warning("Could not load %d-minute bars (%s) - staying on %d-minute bars", new, e, old)
             return False
         today = now_et().date()
-        self.history = df[df.index.date < today] if not df.empty else df
-        # chart positions are counted in bars: rescale the ones already drawn
-        k = old / new
-        if self.pos:
-            p = self.pos
-            p["entry_x"] *= k
-            p["stop_steps"] = [[x * k, y] for x, y in p["stop_steps"]]
-            if p.get("signal_ts") is not None:
-                p["signal_ts"] = _bar_start(p["signal_ts"], new)
-        for c in self.closed:
-            c["entry_x"] *= k
-            c["exit_x"] *= k
+        self.histories = {s: df[df.index.date < today] if not df.empty else df for s, df in got.items()}
+        self.history = self.histories[self.symbol]
+        self.views = {}
+        self._rescale(old, new)
         self.last_bar_seen = None
         self._resync = True
         if " bars)" in self.pick_reason:
@@ -294,6 +482,10 @@ class Bot:
     def size_position(self, equity: float, entry: float, stop: float) -> int:
         """Units to buy from the risk rules (shares for stocks; contracts for futures)."""
         return position_size(equity, entry, stop, self.cfg)
+
+    def _tick(self) -> Decimal:
+        """Smallest price step (stocks: one cent)."""
+        return Decimal("0.01")
 
     def _round_price(self, x: float, rounding) -> Decimal:
         """Round an order price to what the market accepts (cents for stocks, tick size for futures)."""
@@ -531,30 +723,78 @@ class Bot:
             return
         stop_d = self._round_price(stop, ROUND_DOWN)
         tgt_d = self._round_price(target_for(entry_ref, stop, cfg), ROUND_UP) if cfg.use_target else None
+        if self.live:
+            # The signal used the bar's close; by the time the order goes out the price may already
+            # have fallen to the stop. A broker refuses a stop at or above the price, so check first.
+            try:
+                now_px = self._last_trade_price()
+            except Exception as e:
+                now_px = None
+                log.debug("price check failed: %s", e)
+            if now_px is not None and float(stop_d) >= now_px - float(self._tick()):
+                log.info("Signal %s skipped: price %.2f is already at the stop %s (it fell after the bar closed)",
+                         kind, now_px, stop_d)
+                return
         log.info("ENTER %s %s x%d ~%.2f stop %s target %s", kind, self.symbol, shares, entry_ref, stop_d,
                  tgt_d if tgt_d is not None else "none (trailing stop)")
-        self.trades_today += 1
         ex = self._x(signal_ts) + 1 if signal_ts is not None else self._x(now_et())
         pos = dict(kind=kind, entry=entry_ref, init_stop=float(stop_d), stop=float(stop_d),
                    target=float(tgt_d) if tgt_d is not None else None, shares=shares, signal_ts=signal_ts,
                    entry_x=ex, entry_clock=now_et().strftime("%H:%M"), stop_steps=[[ex, float(stop_d)]])
 
         if not self.live:
+            self.trades_today += 1
             self.pos = pos
             return
 
         base_qty = self.held_quantity()          # shares you already owned - never touched
         entry_time = datetime.now(ZoneInfo("UTC"))
-        _, fill_price = self._submit_entry(shares, stop_d, tgt_d, entry_ref)
+        try:
+            _, fill_price = self._submit_entry(shares, stop_d, tgt_d, entry_ref)
+        except Exception as e:
+            # A refused order changes nothing. But a timeout can hide an order that did go through,
+            # so look at the account before giving up: shares that arrived are adopted and protected.
+            log.warning("Entry order failed: %s", e)
+            fill_price = None
         got = max(0, self.held_quantity() - base_qty)
         if got <= 0:
-            log.warning("No shares were bought.")
+            log.warning("No shares were bought - not counted as a trade; still watching for setups.")
             return
+        self.trades_today += 1
         pos.update(entry=fill_price if fill_price is not None else entry_ref, shares=min(got, shares),
                    base_qty=base_qty, entry_time=entry_time)
         self.pos = pos
         self._record("entry", 0.0)
+        self.save_state()                         # a crash from here on still knows about these shares
         self.ensure_stop(wait_seconds=15)
+
+    def _stop_price_of(self, order) -> float | None:
+        """The trigger price of a stop order as the broker has it now (Public and Alpaca)."""
+        v = getattr(order.raw, "stop_price", None) if order is not None else None
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def sync_stop_from_broker(self) -> None:
+        """Live: if the stop order at the broker is higher than the bot's stop (you raised it by hand in
+        the broker's app), follow it, so the bot never lowers a stop you set and trails from there."""
+        if not (self.live and self.pos):
+            return
+        try:
+            so = self._my_stop_order()
+            px = self._stop_price_of(so)
+        except Exception as e:
+            log.debug("stop check failed: %s", e)
+            return
+        if px is None or px <= self.pos["stop"] + 1e-9:
+            return
+        log.info("Stop for %s is %.2f at the broker (raised by hand?) - the bot now uses %.2f, up from %.2f",
+                 self.symbol, px, px, self.pos["stop"])
+        self.pos["stop"] = px
+        step_x = (self._x(self.last_bar_seen) + 1) if self.last_bar_seen is not None else self._x(now_et())
+        self.pos["stop_steps"].append([step_x, px])
+        self.save_state()
 
     def ensure_stop(self, wait_seconds: int = 0) -> None:
         """Live: make sure the bot's shares are protected by a stop at the broker. The broker creates
@@ -665,10 +905,11 @@ class Bot:
         self._record(reason, pnl, exit_price=price)
         exit_x = self._x(self.last_bar_seen) if (self.last_bar_seen is not None and reason not in
                                                  ("end of day", "kill switch")) else min(390 / self.bm - 1, self._x(now_et()))
-        self.closed.append(dict(kind=p["kind"], shares=p["shares"], entry=p["entry"], exit=price, pnl=pnl,
+        self.closed.append(dict(symbol=self.symbol, kind=p["kind"], shares=p["shares"], entry=p["entry"], exit=price, pnl=pnl,
                                 reason=reason, entry_time=p["entry_clock"], exit_time=now_et().strftime("%H:%M"),
                                 entry_x=p["entry_x"], exit_x=max(exit_x, p["entry_x"])))
         self.pos = None
+        self.save_state()
 
     def _record(self, event, pnl, exit_price=None) -> None:
         p = self.pos
@@ -689,61 +930,109 @@ class Bot:
             return self.paper_pnl
         return self.account_equity() - (self.start_equity or 0)
 
+    def _today_bars(self, syms: list[str], now: datetime) -> dict[str, pd.DataFrame]:
+        """Today's completed bars for each symbol (one request, or several at once)."""
+        if len(syms) == 1:
+            raw = {syms[0]: self.fetch_bars(syms[0], "DAY")}
+        else:
+            raw = self.fetch_many(syms, "DAY")
+        out = {}
+        for sym, df in raw.items():
+            tb = complete_bars(df, now, self.bm)
+            if not tb.empty:
+                tb = tb[tb.index.date == now.date()]
+            if not tb.empty:
+                out[sym] = tb
+        return out
+
     def step(self) -> None:
         cfg = self.cfg
         now = now_et()
-        today_bars = complete_bars(self.fetch_bars(self.symbol, "DAY"), now, self.bm)
-        if not today_bars.empty:
-            today_bars = today_bars[today_bars.index.date == now.date()]
-        if today_bars.empty:
+        syms = self._watched()
+        if not syms:
+            return
+        todays = self._today_bars(syms, now)
+        for sym, tb in todays.items():
+            self.bar_time[sym] = tb.index[-1]
+        self._note_stale(syms, now)
+        if not todays:
             if now.time() >= time(10, 15):
                 raise MarketClosed("no bars today by 10:15 ET - market holiday?")
             return
-        newest = today_bars.index[-1]
+        newest = max(tb.index[-1] for tb in todays.values())
         if self.last_bar_seen is not None and newest <= self.last_bar_seen:
             return                                               # no new bar yet
+        mine = todays.get(self.symbol)
+        if not self.live and self.pos and self.last_bar_seen is not None and mine is not None:
+            # paper: bars missed in between (e.g. the bot was restarted) - a stop hit then still counts
+            for ts, b in mine[(mine.index > self.last_bar_seen) & (mine.index < newest)].iterrows():
+                if self.pos:
+                    self.last_bar_seen = ts
+                    self._paper_check(b)
         self.last_bar_seen = newest
-        df = normalize(pd.concat([self.history, today_bars]))
-        bar = df.iloc[-1]
-        self.last_close = float(bar["close"])
-        d = add_indicators(df, cfg)
-        lo, hi = find_swings(d, cfg.swing_n)
-        t = len(d) - 1
-        self.last_price = self.last_close
         self.last_price_time = (newest + timedelta(minutes=self.bm)).strftime("%H:%M")
-        try:
-            self._build_view(d, lo, hi, len(today_bars))
-        except Exception as e:                                    # display must never block trading
-            log.debug("view failed: %s", e)
+
+        frames = {}
+        for sym in syms:
+            tb = todays.get(sym)
+            if tb is None:
+                continue
+            h = self._hist(sym)
+            df = normalize(pd.concat([h, tb])) if h is not None and len(h) else tb
+            d = add_indicators(df, cfg)
+            lo, hi = find_swings(d, cfg.swing_n)
+            frames[sym] = (d, lo, hi)
+            try:
+                self.views[sym] = self._make_view(d, lo, hi)
+                self.watch_info[sym] = self._line_note(d, self.views[sym])
+            except Exception as e:                                # display must never block trading
+                log.debug("view failed for %s: %s", sym, e)
+        if self.symbol in frames:
+            d = frames[self.symbol][0]
+            self.last_close = float(d["close"].iat[-1])
+            self.last_price = self.last_close
+            if self.symbol in self.views:
+                self.view = self.views[self.symbol]
 
         if self._resync:
-            # first check after a bar-size change: the newest bar may have closed a while ago,
-            # so only redraw; exits, trailing and entries resume from the next new bar
+            # first check after a bar-size change or rescan: the newest bar may have closed a while
+            # ago, so only redraw; exits, trailing and entries resume from the next new bar
             self._resync = False
             if self.live:
                 self._check_live_exit()
             if self.pos:
                 self.ensure_stop()
+                self.sync_stop_from_broker()
             return
 
         # 1) exits that happened during this bar
         if self.live:
             self._check_live_exit()
-        else:
-            self._paper_check(bar)
+        elif self.pos and mine is not None:
+            self._paper_check(mine.iloc[-1])
 
         # 2) manage an open position: keep a stop in place and trail it up
         if self.pos:
             self.ensure_stop()
-            if cfg.trail_stop:
+            self.sync_stop_from_broker()
+            if cfg.trail_stop and self.symbol in frames:
+                d, lo, hi = frames[self.symbol]
+                t = len(d) - 1
                 ts = self.pos.get("signal_ts")
                 from_bar = d.index.get_loc(ts) if ts is not None and ts in d.index else t
                 new_stop = trailing_stop(d, t, cfg, lo, from_bar, self.pos["stop"])
                 if new_stop > self.pos["stop"]:
                     self.raise_stop(new_stop)
+            if self.pos and self.symbol in frames:
+                p, close = self.pos, float(frames[self.symbol][0]["close"].iat[-1])
+                be = breakeven_stop(p["entry"], p["init_stop"], close, p["stop"], cfg)
+                if be > p["stop"]:
+                    log.info("BREAKEVEN %s: price %.2f is %.1fR above entry - stop up to the entry price",
+                             self.symbol, close, (close - p["entry"]) / (p["entry"] - p["init_stop"]))
+                    self.raise_stop(be)
             return
 
-        # 3) look for a new entry
+        # 3) look for a new entry on any watched symbol (best-ranked first)
         bt = newest.time()
         loss_limit = (self.start_equity or cfg.starting_equity) * cfg.daily_loss_limit_pct / 100
         if self.day_pnl() <= -loss_limit and not self.halted:
@@ -752,16 +1041,77 @@ class Bot:
         if (self.halted or self.trades_today >= cfg.max_trades_per_day
                 or not (_t(cfg.first_entry_time) <= bt <= _t(cfg.last_entry_time))):
             return
-        sig = signal_at(d, t, cfg, lo, hi)
-        if sig:
+        before = self.symbol
+        for sym in syms:
+            if sym not in frames:
+                continue
+            d, lo, hi = frames[sym]
+            if d.index[-1] != newest:
+                continue                                         # no trade in this symbol this bar
+            sig = signal_at(d, len(d) - 1, cfg, lo, hi)
+            if not sig:
+                continue
             log.info("SIGNAL %s on %s bar %s: line %.2f, stop %.2f",
-                     sig.kind, self.symbol, newest.strftime("%H:%M"), sig.line_value, sig.stop)
+                     sig.kind, sym, newest.strftime("%H:%M"), sig.line_value, sig.stop)
+            self._activate(sym)
+            self.last_close = float(d["close"].iat[-1])
+            self.last_price = self.last_close
+            if sym in self.views:
+                self.view = self.views[sym]
             self.enter(sig.ref_price, sig.stop, sig.kind, signal_ts=newest)
+            if self.pos:
+                return
+        if self.symbol != before and not self.pos and before:
+            self._activate(before)                               # no entry made: back to the chart you had
+            if before in self.views:
+                self.view = self.views[before]
+
+    # ------------------------------------------------- data that stops arriving
+    data_feed_note = "the data feed"                   # Alpaca on the free plan: "Alpaca's free IEX feed"
+
+    def stale_minutes(self, sym: str, now: datetime | None = None) -> float | None:
+        """Minutes since the symbol's newest bar ended, when that is long enough to mean the data feed
+        has had no trades (bars only exist for intervals with trades). None = data is current."""
+        now = now or now_et()
+        ts = self.bar_time.get(sym)
+        if ts is None or ts.date() != now.date() or self.final:
+            return None
+        if not (time(9, 35) <= now.time() < time(16, 0)):
+            return None
+        age = (pd.Timestamp(now) - (ts + timedelta(minutes=self.bm))).total_seconds() / 60
+        return age if age >= max(2 * self.bm, 6) else None
+
+    def _note_stale(self, syms: list[str], now: datetime) -> None:
+        for sym in syms:
+            age = self.stale_minutes(sym, now)
+            if age is not None and sym not in self._stale_logged:
+                self._stale_logged.add(sym)
+                log.warning("No new %s bar for %.0f min - %s has had no trades in it%s", sym, age,
+                            self.data_feed_note,
+                            "; the broker's stop is still active" if self.pos and sym == self.symbol else "")
+            elif age is None and sym in self._stale_logged:
+                self._stale_logged.discard(sym)
+                log.info("%s bars are arriving again", sym)
+
+    def _line_note(self, d: pd.DataFrame, view: dict) -> dict:
+        """Where price sits against the nearest line, for the dashboard's watch table."""
+        c, atr = float(d["close"].iat[-1]), float(d["atr"].iat[-1])
+        notes = []
+        for L in view.get("lines", []):
+            v = L["pts"][1][1]
+            if atr and atr == atr:
+                gap = (c - v) / atr                       # + above the line, - below it
+                where = "above" if gap >= 0 else "below"
+                notes.append(f"{abs(gap):.2f} ATR {where} {L['kind']}")
+        return dict(last=c, note="; ".join(notes) or "no valid line")
 
     # ------------------------------------------------------------- dashboard
     VIEW_DAYS = 5                                   # sessions sent to the page (it shows 1, 2 or 5)
 
-    def _build_view(self, d: pd.DataFrame, lo, hi, n_today: int) -> None:
+    def _build_view(self, d: pd.DataFrame, lo, hi, n_today: int = 0) -> None:
+        self.view = self._make_view(d, lo, hi)
+
+    def _make_view(self, d: pd.DataFrame, lo, hi) -> dict:
         """Chart data for the page. x is in bars from today's 9:30 open; earlier sessions are
         negative (yesterday's 9:30 bar is -390/bar_minutes), so today's positions never change."""
         cfg, t = self.cfg, len(d) - 1
@@ -792,7 +1142,7 @@ class Bot:
                 swings.append(dict(x=xi(i), y=float(d["low"].iat[i]), kind="low"))
             if hi[i]:
                 swings.append(dict(x=xi(i), y=float(d["high"].iat[i]), kind="high"))
-        self.view = dict(bars=bars, lines=lines, swings=swings, days=days)
+        return dict(bars=bars, lines=lines, swings=swings, days=days)
 
     def refresh_quote(self) -> None:
         """Latest trade price between bars (display only)."""
@@ -830,12 +1180,42 @@ class Bot:
             day_pnl=realized + unreal, trades_used=self.trades_today, max_trades=cfg.max_trades_per_day,
             halted=self.halted, spendable=spendable,
             scan=[dict(symbol=r.symbol, score=r.score, setup=r.setup, detail=r.detail) for r in self.scan_results[:50]],
+            stale=self._stale_status(), watch=self._watch_rows(), can_rescan=not self.pos and not self.final, rescan_pending=self.pending_rescan,
+            views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
             **self.view,
         )
+
+    def _stale_text(self, sym: str) -> str:
+        age = self.stale_minutes(sym)
+        return f" - no trades on the feed for {age:.0f} min" if age is not None else ""
+
+    def _stale_status(self) -> dict | None:
+        if not self.symbol:
+            return None
+        age = self.stale_minutes(self.symbol)
+        if age is None:
+            return None
+        ts = self.bar_time[self.symbol] + timedelta(minutes=self.bm)
+        return dict(symbol=self.symbol, minutes=round(age), since=ts.strftime("%H:%M"), feed=self.data_feed_note,
+                    in_trade=bool(self.pos))
+
+    def _watch_rows(self) -> list[dict]:
+        score = {r.symbol: r for r in self.scan_results}
+        rows = []
+        for sym in dict.fromkeys(self.watch + ([self.symbol] if self.symbol else [])):
+            r, info = score.get(sym), self.watch_info.get(sym, {})
+            rows.append(dict(symbol=sym, score=r.score if r else None, setup=r.setup if r else "",
+                             last=info.get("last"),
+                             note=info.get("note", "") + (" (paused while in a trade)" if self.pos and sym != self.symbol
+                                                          else self._stale_text(sym)),
+                             active=sym == self.symbol,
+                             in_trade=bool(self.pos) and sym == self.symbol))
+        return rows
 
     def publish(self, state: str | None = None) -> None:
         if state:
             self.state = state
+        self.save_state()
         if self.dashboard is None:
             return
         try:
@@ -850,35 +1230,64 @@ class Bot:
             return "Loss limit hit - watching only"
         if self.trades_today >= self.cfg.max_trades_per_day:
             return "Trade limit reached - watching only"
+        if len(self.watch) > 1:
+            return f"Watching {len(self.watch)} symbols for a setup"
         return f"Watching {self.symbol} for a setup"
 
     def prepare(self) -> None:
         """Account checks and the morning scan. Uses data up to yesterday's close only, so it can
         run before the open: start the bot early and the pick is ready when trading starts."""
         cfg = self.cfg
+        st = self.load_state()                     # earlier run today? carry on from it
         self.start_equity = self.account_equity() if self.live else cfg.starting_equity
         if self.live:
             try:
                 self.session_checks()
             except Exception as e:
                 log.warning("account check failed: %s", e)
-            self.snapshot_settled_cash()
+            if not st:
+                self.snapshot_settled_cash()
+        if st:
+            self._restore_day(st)
+            if self.live and self.settled_start is not None:
+                log.info("Settled cash for today (from the start of the day): $%.2f, $%.2f already spent",
+                         self.settled_start, self.spent_today)
         log.info("Mode: %s | start equity %.2f", "LIVE" if self.live else "DRY RUN (no orders)", self.start_equity)
         self.publish("Running morning scan")
         self.morning_scan()
+        if st and st.get("pos") and st.get("symbol"):
+            sym = st["symbol"]                     # an open position decides the active symbol
+            if sym not in self.histories:
+                df = self.fetch_bars(sym, "WEEK")
+                self.histories[sym] = df[df.index.date < now_et().date()] if not df.empty else df
+            self._activate(sym)
+            self._restore_position(st)
+        elif st and int(st.get("bar_minutes") or self.bm) != self.bm:
+            self._rescale(int(st["bar_minutes"]), self.bm)      # earlier trades on the chart
         self.prepared = True
+        self.save_state()
         if not self.symbol:
             self.final = True
             self.publish("No setup today - nothing to trade")
             return
-        try:                                       # chart of the earlier days while waiting for the open
-            if self.history is not None and len(self.history):
-                d = add_indicators(self.history.copy(), cfg)
-                lo, hi = find_swings(d, cfg.swing_n)
-                self._build_view(d, lo, hi, 0)
-        except Exception as e:
-            log.debug("view failed: %s", e)
-        self.publish(f"Picked {self.symbol}")
+        self._premarket_views()
+        self.publish(f"Picked {self.symbol}" + (f" (+{len(self.watch) - 1} more watched)" if len(self.watch) > 1 else ""))
+
+    def _premarket_views(self) -> None:
+        """Charts of the earlier days for every watched symbol, while waiting for the open."""
+        for sym in dict.fromkeys([self.symbol] + self.watch):
+            h = self._hist(sym)
+            if h is None or not len(h):
+                continue
+            try:
+                d = add_indicators(h.copy(), self.cfg)
+                lo, hi = find_swings(d, self.cfg.swing_n)
+                self.views[sym] = self._make_view(d, lo, hi)
+                self.watch_info[sym] = self._line_note(d, self.views[sym])
+            except Exception as e:
+                log.debug("view failed for %s: %s", sym, e)
+        if self.symbol in self.views:
+            self.view = self.views[self.symbol]
 
     def run_session(self) -> None:
         cfg = self.cfg
@@ -905,6 +1314,8 @@ class Bot:
             try:
                 if self.apply_pending_bar_size():
                     self.publish(f"Loading {self.bm}-minute bars")
+                if self.pending_rescan:
+                    self.rescan()
                 self.step()
             except MarketClosed as e:
                 log.info("%s Exiting.", e)
@@ -921,10 +1332,10 @@ class Bot:
             last_quote = now_et()
             while True:
                 remaining = (nxt - now_et()).total_seconds()
-                if remaining <= 0 or stop_file.exists() or self.pending_bm:
+                if remaining <= 0 or stop_file.exists() or self.pending_bm or self.pending_rescan:
                     break
                 _time.sleep(min(2.0 if self.dashboard is not None else 15.0, max(1.0, remaining)))
-                if self.dashboard is not None and not self.pending_bm \
+                if self.dashboard is not None and not (self.pending_bm or self.pending_rescan) \
                         and (now_et() - last_quote).total_seconds() >= 14:
                     last_quote = now_et()
                     self.refresh_quote()

@@ -13,6 +13,7 @@ class Config:
     broker: str = "public"                # "public", "alpaca" or "ninjatrader"
     alpaca_paper: bool = True             # alpaca: True = paper (fake money) account, False = real money
     alpaca_feed: str = "iex"              # alpaca: "iex" (free plan) or "sip" (paid full-market data)
+    price_data: str = "broker"            # alpaca: "broker" = Alpaca's own feed, "public" = Public.com's price data
     alpaca_far_target_pct: float = 50.0   # alpaca: with no target, park the bracket's target this far above
     ninja_env: str = "demo"               # ninjatrader: "demo" (simulated money) or "live" (real money)
     ninja_account: str = ""               # ninjatrader: account name to trade (blank = first active account)
@@ -25,6 +26,7 @@ class Config:
     watchlist_file: str = ""              # read the watchlist from this file instead (e.g. watchlist_russell2000.yaml)
     min_price: float = 10.0               # skip stocks under this price
     min_avg_dollar_volume: float = 50e6   # skip thin stocks (avg daily $ volume)
+    watch_count: int = 5                  # watch this many top-ranked symbols for entries (1 = only the top pick)
     scan_workers: int = 10                # morning scan: download this many symbols' bars at once (1-32)
 
     # --- Bars ---------------------------------------------------------------------
@@ -43,10 +45,12 @@ class Config:
     enable_bounce: bool = True
     enable_breakout: bool = True
     trail_stop: bool = True               # raise the stop below each new confirmed swing low
+    breakeven_at_r: float = 1.0           # once price is this many R above entry, stop goes to entry (0 = off)
     trail_min_step_atr: float = 0.1       # only move the stop if it rises at least this many ATRs
     use_target: bool = False              # fixed take-profit at reward_risk x risk (off = let winners run)
     reward_risk: float = 2.0              # take-profit multiple, only used when use_target is true
     stop_buffer_atr: float = 0.25         # stop sits this far below the line / swing low
+    min_stop_pct: float = 0.25            # stop is at least this % below the price (short bars: tiny ATR); 0 = off
     min_stop_atr: float = 0.5             # stop is at least this far below entry (avoids noise stop-outs)
     max_stop_atr: float = 3.0             # skip trades whose stop is wider than this
     first_entry_time: str = "09:45"       # no entries in the opening 15 minutes
@@ -76,6 +80,12 @@ class Config:
     slippage_pct: float = 0.02            # % per side
 
     def validate(self) -> None:
+        if float(self.breakeven_at_r) < 0:
+            raise ValueError(f"breakeven_at_r must be 0 (off) or more, not {self.breakeven_at_r!r}")
+        if not 1 <= int(self.watch_count) <= 20:
+            raise ValueError(f"watch_count must be 1 to 20, not {self.watch_count!r}")
+        if not 0 <= float(self.min_stop_pct) < 20:
+            raise ValueError(f"min_stop_pct must be 0 to 20, not {self.min_stop_pct!r}")
         if not 1 <= int(self.scan_workers) <= 32:
             raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
         if self.bar_minutes not in (1, 2, 3, 5, 10, 15, 30):
@@ -100,6 +110,10 @@ class Config:
         cfg.validate()
         if cfg.ninja_env not in ("demo", "live"):
             raise ValueError(f"ninja_env must be 'demo' or 'live', not {cfg.ninja_env!r}")
+        if cfg.price_data not in ("broker", "public"):
+            raise ValueError(f"price_data must be 'broker' or 'public', not {cfg.price_data!r}")
+        if cfg.price_data == "public" and cfg.broker != "alpaca":
+            raise ValueError("price_data: public is for broker: alpaca (Public and NinjaTrader use their own data)")
         if cfg.alpaca_feed not in ("iex", "sip"):
             raise ValueError(f"alpaca_feed must be 'iex' or 'sip', not {cfg.alpaca_feed!r}")
         return cfg

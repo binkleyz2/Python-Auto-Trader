@@ -119,4 +119,13 @@ def test_shipped_lists_load():
     from swingbot.config import read_watchlist
     sp = read_watchlist(Path(__file__).parent.parent / "watchlist_sp100.yaml")
     assert len(sp) == 100 and "BRK.B" in sp and "GOOG" not in sp
-    Config.load(Path(__file__).parent.parent / "config.yaml")
+    # config.yaml is yours: check every setting in it is valid, with the list file it names stubbed in
+    import shutil, tempfile
+    root = Path(__file__).parent.parent
+    d = Path(tempfile.mkdtemp())
+    shutil.copy(root / "config.yaml", d / "config.yaml")
+    import yaml
+    lf = (yaml.safe_load((root / "config.yaml").read_text()) or {}).get("watchlist_file")
+    if lf and not (d / lf).exists():
+        (d / lf).write_text("watchlist: [AAPL]\n")
+    Config.load(d / "config.yaml")

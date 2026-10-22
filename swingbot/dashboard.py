@@ -52,6 +52,8 @@ class Dashboard:
         self.lan = lan
         self.lan_control = lan_control
         self.on_bar_size = None                 # set by the bot: callable(minutes) -> message
+        self.on_rescan = None                   # set by the bot: callable() -> message
+        self._chart_json: dict[str, bytes] = {} # status with another watched symbol's chart
         self.token = secrets.token_urlsafe(18)  # proves a change came from a page this server served
         # On the network a key is always required; one is generated if you didn't set one.
         self.key = (key or secrets.token_urlsafe(9)) if lan else key
@@ -83,7 +85,7 @@ class Dashboard:
                 return True
 
             def _may_control(self) -> bool:
-                if dash.on_bar_size is None:
+                if dash.on_bar_size is None and dash.on_rescan is None:
                     return False
                 try:
                     local = ipaddress.ip_address(self.client_address[0].split("%")[0]).is_loopback
@@ -104,11 +106,12 @@ class Dashboard:
                 url = urlparse(self.path)
                 if not self._allowed(url):
                     return
-                if url.path != "/bar-size":
+                if url.path not in ("/bar-size", "/rescan"):
                     self.send_error(404)
                     return
-                if not self._may_control():
-                    self._json_reply(403, {"message": "change the bar size on the PC running the bot"})
+                handler = dash.on_bar_size if url.path == "/bar-size" else dash.on_rescan
+                if not self._may_control() or handler is None:
+                    self._json_reply(403, {"message": "use the dashboard on the PC running the bot"})
                     return
                 given = self.headers.get("X-Swingbot-Token") or ""
                 if not hmac.compare_digest(given.encode(), dash.token.encode()):
@@ -118,8 +121,8 @@ class Dashboard:
                     n = int(self.headers.get("Content-Length") or 0)
                     if not 0 < n <= 200:
                         raise ValueError("bad request")
-                    minutes = json.loads(self.rfile.read(n))["minutes"]
-                    msg = dash.on_bar_size(minutes)
+                    body = json.loads(self.rfile.read(n))
+                    msg = handler(body["minutes"]) if url.path == "/bar-size" else handler()
                 except (ValueError, KeyError, TypeError) as e:
                     self._json_reply(400, {"message": str(e) or "bad request"})
                     return
@@ -140,8 +143,9 @@ class Dashboard:
                                             % json.dumps({"token": dash.token}))
                     body, ctype = html.encode("utf-8"), "text/html; charset=utf-8"
                 elif path == "/status.json":
+                    chart = (parse_qs(url.query).get("chart") or [""])[0]
                     with dash._lock:
-                        body = dash._json
+                        body = dash._chart_json.get(chart, dash._json)
                     ctype = "application/json"
                 else:
                     self.send_error(404)
@@ -191,9 +195,16 @@ class Dashboard:
     # ---------------------------------------------------------------- data
     def update(self, status: dict) -> None:
         status = dict(status, events=list(self.events.events)[::-1])
+        views = status.pop("views", None) or {}
+        status["chart_symbol"] = status.get("symbol")
         data = json.dumps(status, default=_jsonable).encode()
+        charts = {}
+        for sym, view in views.items():            # the page asks for another watched symbol's chart
+            if sym != status.get("symbol"):         # with ?chart=SYM; everything else stays the same
+                charts[sym] = json.dumps(dict(status, **view, chart_symbol=sym), default=_jsonable).encode()
         with self._lock:
             self._json = data
+            self._chart_json = charts
 
     def snapshot(self, path: Path) -> Path:
         """Save a self-contained copy of the page with the final status baked in (opens offline)."""

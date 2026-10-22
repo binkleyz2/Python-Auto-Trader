@@ -4,6 +4,7 @@
 broker: alpaca
 alpaca_paper: true          # alpaca only: true = paper account (fake money), false = REAL money
 alpaca_feed: iex            # alpaca only: "iex" (free data plan) or "sip" (paid full-market data)
+price_data: public          # alpaca only: "public" = prices from Public.com (needs Public keys in .env), "broker" = Alpaca's feed
 
 #watchlist: [CCC, INTC, NVDA, CRWV, SPCX, OPEN, IREN, NOK, AAPL, SOFI, VRNS, WULF, PLUG, F, BAC, GRAB, BBD, SMCI, CIFR, T, NFLX, NU, AAL, RIG, FRO, DHT, STNG, INSW]
 # S&P 100 as of the Sept 21, 2026 rebalance (GOOG left out; GOOGL covers Alphabet)
@@ -20,8 +21,11 @@ alpaca_feed: iex            # alpaca only: "iex" (free data plan) or "sip" (paid
 watchlist_file: watchlist_russell2000.yaml
 min_price: 10
 min_avg_dollar_volume: 10000000
+watch_count: 5
+scan_workers: 15
+bar_minutes: 3
 
-# Swing points: 5 bars on each side, on 5-minute bars
+# Swing points: 5 bars on each side, on 3-minute bars
 swing_n: 5
 touch_tolerance_atr: 0.25
 break_tolerance_atr: 0.10
@@ -33,10 +37,12 @@ enable_breakout: true
 stop_buffer_atr: 0.25
 min_stop_atr: 0.5
 max_stop_atr: 3.0
+min_stop_pct: 0.25   # stop at least this % below the price; 0 = off
 
 # Exits: the stop trails up under each new confirmed swing low; no fixed profit target
 trail_stop: true
 trail_min_step_atr: 0.1        # ignore stop raises smaller than this (fewer order changes)
+breakeven_at_r: 1.0            # once price is 1R above entry, stop moves up to the entry price (0 = off)
 use_target: false              # true = also take profit at reward_risk x the risk
 reward_risk: 2.0
 
@@ -44,13 +50,13 @@ reward_risk: 2.0
 first_entry_time: "09:45"
 last_entry_time: "15:30"
 flatten_time: "15:50"
-max_trades_per_day: 5
+max_trades_per_day: 4
 
 # Risk
 risk_per_trade_pct: 0.5
 max_position_pct: 25
 daily_loss_limit_pct: 1.5
-use_margin: true
+use_margin: false
 settled_cash_only: true        # only spend cash that was already settled; today's sale proceeds are never reused
 buying_power_buffer_pct: 2.0   # live orders never use more than 98% of current cash buying power
 
@@ -59,7 +65,7 @@ dashboard: true
 dashboard_port: 8765
 dashboard_open_browser: true
 dashboard_lan: true        # true = phones/PCs on your home network can view it (needs the key)
-dashboard_key: "xyzzy!!!"           # set your own key to bookmark the address; blank = new random key each run
+dashboard_key:            # set your own key to bookmark the address; blank = new random key each run
 
 # Backtest
 starting_equity: 25000
