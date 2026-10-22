@@ -395,7 +395,9 @@ function renderChart(s) {
     if (p && b.x >= p.entry_x) {
       let sv = p.init_stop;
       (p.stop_steps || []).forEach(st2 => { if (st2[0] <= b.x) sv = st2[1]; });
-      addRow(tip, "Stop", fmt(sv), cssVar("--stop"));
+      // the stop in force during this bar; if it has been raised since, show today's level too
+      if (Math.abs(sv - p.stop) < 1e-9) addRow(tip, "Stop", fmt(sv), cssVar("--stop"));
+      else { addRow(tip, "Stop then", fmt(sv), cssVar("--stop")); addRow(tip, "Stop now", fmt(p.stop), cssVar("--stop")); }
     }
     tip.style.display = "block";
     const wrap = $("chartwrap").getBoundingClientRect();
