@@ -86,8 +86,9 @@ class FakeTrading:
 
     def replace_order_by_id(self, oid, req):
         old = self.all[str(oid)]
-        new = self._mk(old.side, old.order_type, int(old.qty), status=old.status, stop=req.stop_price,
-                       limit=old.limit_price, top=False)
+        new = self._mk(old.side, old.order_type, int(old.qty), status=old.status,
+                       stop=getattr(req, "stop_price", None) or old.stop_price,
+                       limit=getattr(req, "limit_price", None) or old.limit_price, top=False)
         new.parent = old.parent
         if old.parent:
             old.parent.legs = [new if leg is old else leg for leg in old.parent.legs]

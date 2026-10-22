@@ -243,7 +243,8 @@ def trailing_stop(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray,
     atr = df["atr"].iat[t]
     if np.isnan(atr) or atr <= 0:
         return current_stop
-    candidate = df["low"].iat[from_bar + idx[-1]] - cfg.stop_buffer_atr * atr
+    buf = cfg.trail_buffer_atr if cfg.trail_buffer_atr is not None else cfg.stop_buffer_atr
+    candidate = df["low"].iat[from_bar + idx[-1]] - buf * atr
     if candidate >= df["close"].iat[t]:
         return current_stop
     candidate = min(candidate, min_stop_price(df["close"].iat[t], cfg))   # never trail closer than min_stop_pct

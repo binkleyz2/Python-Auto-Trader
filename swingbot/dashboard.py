@@ -53,6 +53,7 @@ class Dashboard:
         self.lan_control = lan_control
         self.on_bar_size = None                 # set by the bot: callable(minutes) -> message
         self.on_rescan = None                   # set by the bot: callable() -> message
+        self.on_setting = None                  # set by the bot: callable(key, value) -> message
         self._chart_json: dict[str, bytes] = {} # status with another watched symbol's chart
         self.token = secrets.token_urlsafe(18)  # proves a change came from a page this server served
         # On the network a key is always required; one is generated if you didn't set one.
@@ -85,7 +86,7 @@ class Dashboard:
                 return True
 
             def _may_control(self) -> bool:
-                if dash.on_bar_size is None and dash.on_rescan is None:
+                if dash.on_bar_size is None and dash.on_rescan is None and dash.on_setting is None:
                     return False
                 try:
                     local = ipaddress.ip_address(self.client_address[0].split("%")[0]).is_loopback
@@ -106,10 +107,11 @@ class Dashboard:
                 url = urlparse(self.path)
                 if not self._allowed(url):
                     return
-                if url.path not in ("/bar-size", "/rescan"):
+                handlers = {"/bar-size": dash.on_bar_size, "/rescan": dash.on_rescan, "/setting": dash.on_setting}
+                if url.path not in handlers:
                     self.send_error(404)
                     return
-                handler = dash.on_bar_size if url.path == "/bar-size" else dash.on_rescan
+                handler = handlers[url.path]
                 if not self._may_control() or handler is None:
                     self._json_reply(403, {"message": "use the dashboard on the PC running the bot"})
                     return
@@ -122,7 +124,12 @@ class Dashboard:
                     if not 0 < n <= 200:
                         raise ValueError("bad request")
                     body = json.loads(self.rfile.read(n))
-                    msg = handler(body["minutes"]) if url.path == "/bar-size" else handler()
+                    if url.path == "/bar-size":
+                        msg = handler(body["minutes"])
+                    elif url.path == "/setting":
+                        msg = handler(str(body["key"]), body["value"])
+                    else:
+                        msg = handler()
                 except (ValueError, KeyError, TypeError) as e:
                     self._json_reply(400, {"message": str(e) or "bad request"})
                     return

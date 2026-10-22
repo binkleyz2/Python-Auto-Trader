@@ -4,6 +4,20 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.2.1 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.3.0 – 2026-10-22
+
+- **Settings card on the dashboard** showing the rules in force from `config.yaml`: risk and limits, stops,
+  profit, timing.
+- **Three settings adjustable from the dashboard for the rest of the day** (PC running the bot only, like
+  the other controls; kept across a restart; tomorrow starts from `config.yaml` again):
+  - **Trail distance under swing lows** (new setting `trail_buffer_atr`; blank = `stop_buffer_atr`, 0.25
+    ATR). A looser trail only affects future stop raises; a stop never moves down.
+  - **Move stop to entry once up** (`breakeven_at_r`, R multiple; 0 = off).
+  - **Profit target** (R multiple; 0 = off). On Alpaca it is also set on the open trade by moving the
+    bracket's take-profit leg; a target at or below the current price is refused. On Public and
+    NinjaTrader it applies from the next trade.
+- Each change is logged with the old value and the `config.yaml` value.
+
 ## v1.2.1 – 2026-10-22
 
 - **Dashboard tooltip shows the current stop.** Hovering a bar showed the stop in force during that bar,

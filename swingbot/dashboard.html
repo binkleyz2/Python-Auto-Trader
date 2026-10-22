@@ -89,6 +89,20 @@
   .tf button { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface);
                border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
   .tf button:disabled { color: var(--muted); cursor: default; }
+  .sgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 18px; }
+  @media (max-width: 1000px) { .sgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .sgrid { grid-template-columns: 1fr; } }
+  .sgrid > div { min-width: 0; }
+  .sgrid h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 0 0 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .srow { padding: 5px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+  .srow .sl { color: var(--ink-2); font-size: 12px; }
+  .srow .sv { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .srow.changed .sv { font-weight: 600; }
+  .srow .sd { color: var(--muted); font-size: 11.5px; }
+  .srow input { width: 5.5em; font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+                border: 1px solid var(--border); border-radius: 6px; padding: 1px 4px; }
+  .srow button { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface);
+                 border: 1px solid var(--border); border-radius: 6px; padding: 1px 8px; cursor: pointer; margin-left: 4px; }
   #watch tr.pick { cursor: pointer; }
   #watch tr.pick:hover td { background: var(--grid); }
   #watch tr.on td:first-child { font-weight: 600; }
@@ -142,6 +156,11 @@
   <section class="card">
     <h2 id="watch-h">Watching</h2>
     <div id="watch"></div>
+  </section>
+
+  <section class="card">
+    <h2>Settings <span class="updated" id="set-note"></span></h2>
+    <div id="settings" class="sgrid"></div>
   </section>
 
   <div class="grid2">
@@ -545,6 +564,7 @@ function renderTables(s) {
     {h: "Exit by", f: r => r.reason}, {h: "P&L", num: 1, f: r => signed(r.pnl), tone: r => r.pnl},
   ], s.trades || [], "No completed trades yet.");
   renderWatch(s);
+  renderSettings(s);
   table($("scan"), [
     {h: "Symbol", f: r => r.symbol}, {h: "Score", num: 1, f: r => fmt(r.score)}, {h: "Setup", f: r => r.setup}, {h: "Detail", f: r => r.detail},
   ], s.scan || [], "Scan runs at 9:35 ET.");
@@ -555,6 +575,60 @@ function renderTables(s) {
     d.append(t, document.createTextNode(e.msg)); log.appendChild(d);
   });
   if (!log.childNodes.length) { const d = document.createElement("div"); d.className = "none"; d.textContent = "Nothing yet."; log.appendChild(d); }
+}
+
+// ------------------------------------------------------------------ settings (three adjustable for today)
+let SETSIG = "";
+function renderSettings(s) {
+  const box = $("settings"), groups = s.settings || [], can = CTRL && !s.final;
+  const sig = JSON.stringify(groups.map(g => [g.group, g.items.map(i => i.key || i.label)])) + can;
+  if (sig !== SETSIG) {                                      // rebuild only when the layout changes
+    SETSIG = sig;
+    box.replaceChildren(...groups.map(g => {
+      const col = document.createElement("div");
+      const h = document.createElement("h3"); h.textContent = g.group; col.appendChild(h);
+      g.items.forEach(it => {
+        const row = document.createElement("div"); row.className = "srow"; row.dataset.key = it.key || "";
+        const l = document.createElement("div"); l.className = "sl"; l.textContent = it.label;
+        const v = document.createElement("div"); v.className = "sv";
+        row.append(l, v);
+        if (it.key && can) {
+          const inp = document.createElement("input"); inp.type = "number";
+          inp.min = it.min; inp.max = it.max; inp.step = it.step; inp.setAttribute("aria-label", it.label);
+          inp.addEventListener("input", () => { inp.dataset.dirty = "1"; });
+          const unit = document.createElement("span"); unit.className = "su"; unit.textContent = " " + it.unit;
+          const b = document.createElement("button"); b.type = "button"; b.textContent = "Set";
+          const go = async () => {
+            $("set-note").textContent = "sending…";
+            try {
+              const [ok, msg] = await control("setting", {key: it.key, value: Number(inp.value)});
+              $("set-note").textContent = msg;
+              if (ok) delete inp.dataset.dirty;
+            } catch (e) { $("set-note").textContent = "couldn't reach the bot"; }
+          };
+          b.addEventListener("click", go);
+          inp.addEventListener("keydown", ev => { if (ev.key === "Enter") go(); });
+          v.append(inp, unit, b);
+        }
+        const d = document.createElement("div"); d.className = "sd"; row.appendChild(d);
+        col.appendChild(row);
+      });
+      return col;
+    }));
+  }
+  const rows = box.querySelectorAll(".srow");
+  let k = 0;
+  groups.forEach(g => g.items.forEach(it => {
+    const row = rows[k++]; if (!row) return;
+    const v = row.querySelector(".sv"), d = row.querySelector(".sd"), inp = row.querySelector("input");
+    row.classList.toggle("changed", !!it.changed);
+    if (it.key) {
+      if (inp) { if (!inp.dataset.dirty && document.activeElement !== inp) inp.value = it.value; }
+      else v.textContent = (it.value === 0 && it.unit.includes("off") ? "off" : it.value + " " + it.unit.split(" (")[0]);
+      d.textContent = (it.changed ? `today only · config.yaml: ${it.default}` : "") +
+                      ((s.settings_pending || []).includes(it.key) ? " · applying…" : "");
+    } else v.textContent = it.text;
+  }));
 }
 
 function renderWatch(s) {

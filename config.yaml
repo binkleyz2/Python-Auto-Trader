@@ -42,6 +42,7 @@ min_stop_pct: 0.25   # stop at least this % below the price; 0 = off
 
 # Exits: the stop trails up under each new confirmed swing low; no fixed profit target
 trail_stop: true
+trail_buffer_atr:              # trailing stop this far under each swing low, in ATR (blank = stop_buffer_atr)
 trail_min_step_atr: 0.1        # ignore stop raises smaller than this (fewer order changes)
 breakeven_at_r: 1.0            # once price is 1R above entry, stop moves up to the entry price (0 = off)
 use_target: false              # true = also take profit at reward_risk x the risk

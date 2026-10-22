@@ -47,6 +47,7 @@ class Config:
     enable_breakout: bool = True
     trail_stop: bool = True               # raise the stop below each new confirmed swing low
     breakeven_at_r: float = 1.0           # once price is this many R above entry, stop goes to entry (0 = off)
+    trail_buffer_atr: float | None = None # trailing stop sits this far below each swing low (blank = stop_buffer_atr)
     trail_min_step_atr: float = 0.1       # only move the stop if it rises at least this many ATRs
     use_target: bool = False              # fixed take-profit at reward_risk x risk (off = let winners run)
     reward_risk: float = 2.0              # take-profit multiple, only used when use_target is true

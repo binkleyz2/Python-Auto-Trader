@@ -73,6 +73,18 @@ Nothing on the page can place, change or cancel orders. It is reachable from thi
 
 **Kill switch:** create a file named `STOP` in the folder. Within 5 minutes the bot cancels its orders, sells its position, and exits.
 
+## Settings on the dashboard
+
+The **Settings** card shows the rules in force: risk and limits, stops, profit and timing, as loaded from `config.yaml`. Three can be changed there for the rest of the day, from the PC running the bot (or the network too with `dashboard_lan_control: true`):
+
+| Setting | What it does | config.yaml |
+| --- | --- | --- |
+| Trail distance under swing lows | How far under each new swing low the trailing stop goes, in ATR. Larger = looser, rides pullbacks. Affects future raises only; the stop never moves down. | `trail_buffer_atr` (blank = `stop_buffer_atr`) |
+| Move stop to entry once up | The breakeven trigger in R; 0 = off | `breakeven_at_r` |
+| Profit target | Take profit at entry + this many R; 0 = off. On Alpaca it is also placed on the open trade (refused if the price is already there). On Public and NinjaTrader it applies from the next trade. | `use_target` / `reward_risk` |
+
+Changes are logged, kept if the bot restarts that day, and marked "today only" on the card next to the `config.yaml` value. The next day starts from `config.yaml` again; edit the file to make a change permanent.
+
 ## Watching several stocks, and rescanning
 
 The morning scan ranks the watchlist and the bot watches the best `watch_count` (default 5) for entries, not just the top one. At each bar close it checks every watched symbol and trades the first that signals, best-ranked first if two signal on the same bar. Still only one position at a time and at most `max_trades_per_day`: while a trade is open only that stock is followed, and the others resume once it closes. `watch_count: 1` gives the old single-pick behaviour, and `--symbol X` watches only X.

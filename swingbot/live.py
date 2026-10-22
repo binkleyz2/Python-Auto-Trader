@@ -10,6 +10,7 @@ its open orders, sells its position and exits within one loop.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import json
 import logging
 import math
@@ -118,6 +119,9 @@ class Bot:
         self.views: dict[str, dict] = {}               # chart data per watched symbol (dashboard)
         self.watch_info: dict[str, dict] = {}          # latest price / nearest line per watched symbol
         self.pending_rescan = False                    # "Rescan" pressed on the dashboard
+        self.cfg0 = dataclasses.replace(cfg)           # config.yaml as loaded (today's changes are compared to it)
+        self.overrides: dict[str, float] = {}          # settings changed on the dashboard, for the rest of today
+        self.pending_settings: dict[str, float] = {}
         self.bar_time: dict[str, pd.Timestamp] = {}    # start of each symbol's newest bar today
         self._stale_logged: set[str] = set()
         self.bm = int(cfg.bar_minutes)                 # bar size in minutes (1, 5, ...)
@@ -231,6 +235,136 @@ class Bot:
         if sym in self.histories:
             return self.histories[sym]
         return self.history if sym == self.symbol else None
+
+    # ------------------------------------------------- settings: shown on the page, some adjustable today
+    ADJUSTABLE = {
+        "trail_buffer_atr": dict(label="Trail distance under swing lows", unit="ATR", min=0.05, max=3.0, step=0.05),
+        "breakeven_at_r": dict(label="Move stop to entry once up", unit="R (0 = off)", min=0.0, max=5.0, step=0.25),
+        "target_r": dict(label="Profit target", unit="R (0 = off)", min=0.0, max=10.0, step=0.25),
+    }
+
+    def setting_value(self, key: str, cfg: Config | None = None) -> float:
+        cfg = cfg or self.cfg
+        if key == "trail_buffer_atr":
+            return float(cfg.trail_buffer_atr if cfg.trail_buffer_atr is not None else cfg.stop_buffer_atr)
+        if key == "target_r":
+            return float(cfg.reward_risk) if cfg.use_target else 0.0
+        return float(getattr(cfg, key))
+
+    def request_setting(self, key: str, value) -> str:
+        """Dashboard (its own thread): check the value and queue it; the main loop applies it between
+        checks. Lasts for the rest of today (kept across restarts); tomorrow starts from config.yaml."""
+        spec = self.ADJUSTABLE.get(key)
+        if spec is None:
+            raise ValueError("that setting can't be changed from the page")
+        if self.final:
+            raise ValueError("the session is over")
+        try:
+            v = round(float(value), 4)
+        except (TypeError, ValueError):
+            raise ValueError(f"{spec['label']} must be a number")
+        if not spec["min"] <= v <= spec["max"]:
+            raise ValueError(f"{spec['label']} must be {spec['min']:g} to {spec['max']:g} {spec['unit']}")
+        if key in ("breakeven_at_r", "target_r") and 0 < v < 0.5:
+            raise ValueError(f"{spec['label']}: 0 (off) or at least 0.5 R")
+        with self._bm_lock:
+            self.pending_settings[key] = v
+        log.info("Dashboard: %s -> %g requested", spec["label"], v)
+        return f"{spec['label']}: {v:g} {spec['unit'].split(' (')[0]} for the rest of today"
+
+    def apply_pending_settings(self) -> bool:
+        with self._bm_lock:
+            pend, self.pending_settings = self.pending_settings, {}
+        for key, v in pend.items():
+            self._apply_setting(key, v)
+        return bool(pend)
+
+    def _apply_setting(self, key: str, v: float, announce: bool = True) -> None:
+        spec, old = self.ADJUSTABLE[key], self.setting_value(key)
+        if key == "trail_buffer_atr":
+            self.cfg.trail_buffer_atr = v
+        elif key == "breakeven_at_r":
+            self.cfg.breakeven_at_r = v
+        elif key == "target_r":
+            self.cfg.use_target = v > 0
+            if v > 0:
+                self.cfg.reward_risk = v
+        self.overrides[key] = v
+        if announce:
+            log.info("Setting for the rest of today: %s %g -> %g %s (config.yaml: %g)", spec["label"], old, v,
+                     spec["unit"].split(" (")[0], self.setting_value(key, self.cfg0))
+            if key == "target_r" and self.pos:
+                self._retarget(v)
+            if key == "breakeven_at_r" and self.pos and self.pos["stop"] >= self.pos["entry"]:
+                log.info("(the open trade's stop is already at or above the entry; it never moves down)")
+        self.save_state()
+
+    def _retarget(self, r: float) -> None:
+        """Put a profit target on the open trade at entry + r x its risk (r = 0 removes it)."""
+        p = self.pos
+        risk = p["entry"] - p["init_stop"]
+        new = p["entry"] + r * risk if r > 0 and risk > 0 else None
+        if new is not None:
+            try:
+                px = self._last_trade_price()
+            except Exception:
+                px = None
+            px = px if px is not None else self.last_price
+            if px is not None and new <= px + float(self._tick()):
+                log.warning("Target %.2f is at or below the price %.2f - not set for the open trade (it would "
+                            "sell at once); it applies to the next trade", new, px)
+                return
+            new = float(self._round_price(new, ROUND_UP))
+        if self.live:
+            try:
+                self._set_target(new)
+            except NotImplementedError:
+                log.warning("%s: a profit target can't be added to an open trade here - it applies from the "
+                            "next trade", self.broker_name)
+                return
+            except Exception as e:
+                log.error("Could not change the open trade's target (it stays as it was): %s", e)
+                return
+        p["target"] = new
+        log.info("Open trade %s: %s", self.symbol, f"profit target {new:.2f}" if new is not None else "no profit target")
+
+    def _set_target(self, price: float | None) -> None:
+        raise NotImplementedError                      # Public / NinjaTrader: not for an open trade
+
+    def _settings_rows(self) -> list[dict]:
+        c, c0 = self.cfg, self.cfg0
+        def adj(key):
+            spec = self.ADJUSTABLE[key]
+            return dict(key=key, label=spec["label"], value=self.setting_value(key), unit=spec["unit"],
+                        min=spec["min"], max=spec["max"], step=spec["step"], default=self.setting_value(key, c0),
+                        changed=key in self.overrides and self.setting_value(key) != self.setting_value(key, c0))
+        cash = ("settled cash only" if c.settled_cash_only else "cash") + (", margin allowed" if c.use_margin else ", no margin")
+        profit = [adj("target_r")]
+        if self.pos:
+            t = self.pos.get("target")
+            profit.append(dict(label="This trade", text=f"target {t:.2f}" if t else "no target - rides the trailing stop"))
+        else:
+            profit.append(dict(label="With no target", text="winners run until the trailing stop or 15:50"))
+        return [
+            dict(group="Risk and limits", items=[
+                dict(label="Risk per trade", text=f"{c.risk_per_trade_pct:g}% of the account"),
+                dict(label="Daily loss limit", text=f"{c.daily_loss_limit_pct:g}% (no new entries after)"),
+                dict(label="Trades per day", text=f"{c.max_trades_per_day}"),
+                dict(label="Largest position", text=f"{c.max_position_pct:g}% of the account"),
+                dict(label="Cash", text=cash)]),
+            dict(group="Stops", items=[
+                dict(label="Initial stop", text=f"{c.stop_buffer_atr:g} ATR under the line; at least {c.min_stop_atr:g} ATR "
+                                                f"and {c.min_stop_pct:g}% under entry; skip if over {c.max_stop_atr:g} ATR"),
+                adj("trail_buffer_atr"),
+                dict(label="Trail step", text=f"raised only by {c.trail_min_step_atr:g} ATR or more"),
+                adj("breakeven_at_r")]),
+            dict(group="Profit", items=profit),
+            dict(group="Timing", items=[
+                dict(label="New entries", text=f"{c.first_entry_time}-{c.last_entry_time} ET"),
+                dict(label="Sell everything", text=f"{c.flatten_time} ET"),
+                dict(label="Bars", text=f"{self.bm} minutes"),
+                dict(label="Watching", text=f"top {c.watch_count} from the scan" if c.watch_count > 1 else "the top pick")]),
+        ]
 
     # ------------------------------------------------- rescan on demand
     def request_rescan(self) -> str:
@@ -394,6 +528,7 @@ class Bot:
                       settled_start=self.settled_start, spent_today=self.spent_today,
                       trades_today=self.trades_today, halted=self.halted, paper_pnl=self.paper_pnl,
                       closed=self.closed, pos=p, my_order_ids=sorted(map(str, self.my_order_ids)),
+                      overrides=self.overrides,
                       last_bar_seen=self.last_bar_seen.isoformat() if self.last_bar_seen is not None else None,
                       extra=self._extra_state())
             path = self._state_path()
@@ -430,6 +565,10 @@ class Bot:
         self.halted = bool(st.get("halted"))
         self.paper_pnl = float(st.get("paper_pnl") or 0)
         self.closed = list(st.get("closed") or [])
+        for key, v in (st.get("overrides") or {}).items():       # today's dashboard changes still apply
+            if key in self.ADJUSTABLE:
+                self._apply_setting(key, float(v), announce=False)
+                log.info("Today's setting kept from earlier: %s %g", self.ADJUSTABLE[key]["label"], float(v))
         log.info("Resuming today's session: %d trade(s) so far, day starts from equity %.2f%s",
                  self.trades_today, self.start_equity or 0,
                  ", loss limit already hit" if self.halted else "")
@@ -1198,6 +1337,7 @@ class Bot:
             day_pnl=realized + unreal, trades_used=self.trades_today, max_trades=cfg.max_trades_per_day,
             halted=self.halted, spendable=spendable,
             scan=[dict(symbol=r.symbol, score=r.score, setup=r.setup, detail=r.detail) for r in self.scan_results[:50]],
+            settings=self._settings_rows(), settings_pending=sorted(self.pending_settings),
             stale=self._stale_status(), watch=self._watch_rows(), can_rescan=not self.pos and not self.final, rescan_pending=self.pending_rescan,
             views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
             **self.view,
@@ -1333,6 +1473,8 @@ class Bot:
             try:
                 if self.apply_pending_bar_size():
                     self.publish(f"Loading {self.bm}-minute bars")
+                if self.apply_pending_settings():
+                    self.publish()
                 if self.pending_rescan:
                     self.rescan()
                 self.step()
@@ -1351,6 +1493,9 @@ class Bot:
             last_quote = now_et()
             while True:
                 remaining = (nxt - now_et()).total_seconds()
+                if self.pending_settings:
+                    self.apply_pending_settings()          # takes effect now, between checks
+                    self.publish()
                 if remaining <= 0 or stop_file.exists() or self.pending_bm or self.pending_rescan:
                     break
                 _time.sleep(min(2.0 if self.dashboard is not None else 15.0, max(1.0, remaining)))

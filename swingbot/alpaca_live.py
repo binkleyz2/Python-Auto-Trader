@@ -297,6 +297,17 @@ class AlpacaBot(Bot):
         o = self.client.trading.replace_order_by_id(so.id, ReplaceOrderRequest(stop_price=float(new_d)))
         return str(o.id)
 
+    def _set_target(self, price: float | None) -> None:
+        """Move the take-profit leg of the open bracket (None = park it far above, i.e. no target)."""
+        from alpaca.trading.requests import ReplaceOrderRequest
+        leg = next((o for o in self._my_open_orders() if o.side == "SELL" and o.type == "LIMIT"), None)
+        if leg is None:
+            raise RuntimeError("no take-profit leg found on the open bracket order")
+        px = price if price is not None else float(
+            _price(self.pos["entry"] * (1 + self.cfg.alpaca_far_target_pct / 100), ROUND_UP))
+        o = self.client.trading.replace_order_by_id(leg.id, ReplaceOrderRequest(limit_price=float(px)))
+        self.my_order_ids.add(str(o.id))
+
     def _cancel(self, order_id: str) -> None:
         self.client.trading.cancel_order_by_id(order_id)
 
