@@ -73,8 +73,10 @@ def _start_dashboard(cfg, bot):
 
 
 def main(argv=None) -> None:
+    from . import __version__
     ap = argparse.ArgumentParser(prog="swingbot", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version", version=f"swingbot {__version__}")
     ap.add_argument("command", choices=["demo", "backtest", "fetch", "scan", "run"])
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--data", default="data")

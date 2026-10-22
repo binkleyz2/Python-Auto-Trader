@@ -4,6 +4,8 @@ A day-trading bot for Public.com or Alpaca (stocks) or NinjaTrader (futures) tha
 
 **You are responsible for every order it sends.** It starts in dry-run mode, which places no orders. Run the backtest and at least a few weeks of dry runs before you use `--live`.
 
+Version history: see [CHANGELOG.md](CHANGELOG.md) and the repository's Releases page. `py -m swingbot --version` shows the installed version.
+
 ## Rules the bot follows
 
 | Step | Rule |

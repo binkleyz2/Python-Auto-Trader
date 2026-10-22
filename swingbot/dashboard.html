@@ -99,6 +99,7 @@
   <header>
     <h1 id="sym">swingbot</h1>
     <span class="pick" id="pick"></span>
+    <span class="updated" id="ver"></span>
     <span class="spacer"></span>
     <span class="badge" id="mode">–</span>
     <span class="badge" id="state">connecting…</span>
@@ -188,6 +189,7 @@ const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(
 function renderTop(s) {
   $("sym").textContent = s.symbol || "No pick";
   $("pick").textContent = s.pick_reason || "";
+  $("ver").textContent = s.version ? "v" + s.version : "";
   const m = $("mode");
   m.textContent = s.mode || "–";
   m.className = "badge " + (s.mode === "LIVE" ? "live" : "dry");

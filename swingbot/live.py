@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from . import __version__
 from .backtest import position_size
 from .config import Config
 from .data import fetch_public, normalize
@@ -1189,7 +1190,7 @@ class Bot:
             spendable = max(0.0, self.settled_start - self.spent_today)
         now = now_et()
         return dict(
-            mode="LIVE" if self.live else "DRY RUN", state=self.state, final=self.final, unit=self.unit_label,
+            version=__version__, mode="LIVE" if self.live else "DRY RUN", state=self.state, final=self.final, unit=self.unit_label,
             bar_minutes=self.bm, bar_sizes=self.bar_sizes(), pending_bars=self.pending_bm,
             symbol=self.symbol, pick_reason=self.pick_reason, date=now.strftime("%Y-%m-%d"),
             updated=now.strftime("%H:%M:%S"), epoch=now.timestamp(),
@@ -1269,7 +1270,8 @@ class Bot:
             if self.live and self.settled_start is not None:
                 log.info("Settled cash for today (from the start of the day): $%.2f, $%.2f already spent",
                          self.settled_start, self.spent_today)
-        log.info("Mode: %s | start equity %.2f", "LIVE" if self.live else "DRY RUN (no orders)", self.start_equity)
+        log.info("swingbot v%s | Mode: %s | start equity %.2f", __version__,
+                 "LIVE" if self.live else "DRY RUN (no orders)", self.start_equity)
         self.publish("Running morning scan")
         self.morning_scan()
         if st and st.get("pos") and st.get("symbol"):
