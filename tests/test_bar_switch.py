@@ -65,13 +65,13 @@ def test_request_is_checked_and_only_queued(tmp_path):
     with pytest.raises(ValueError):
         bot.request_bar_size("abc")
     assert bot.request_bar_size(5).startswith("Already")
-    assert "1-minute" in bot.request_bar_size(1)
-    assert bot.bm == 5 and bot.pending_bm == 1      # nothing changes until the main loop applies it
+    assert "10-minute" in bot.request_bar_size(10)
+    assert bot.bm == 5 and bot.pending_bm == 10      # nothing changes until the main loop applies it
     bot.request_bar_size(5)                          # changing your mind back cancels the request
     assert bot.pending_bm is None
     bot.final = True
     with pytest.raises(ValueError):
-        bot.request_bar_size(1)
+        bot.request_bar_size(10)
 
 
 def test_switch_mid_trade_keeps_the_stop_and_keeps_trailing(tmp_path, monkeypatch):
@@ -85,18 +85,18 @@ def test_switch_mid_trade_keeps_the_stop_and_keeps_trailing(tmp_path, monkeypatc
     stop_before, entry_x = bot.pos["stop"], bot.pos["entry_x"]
     steps_before = len(bot.pos["stop_steps"])
 
-    bot.request_bar_size(1)
+    bot.request_bar_size(10)
     assert bot.apply_pending_bar_size()
-    assert bot.bm == 1 and c.sizes[-1] == 1
+    assert bot.bm == 10 and c.sizes[-1] == 10
     assert bot.pos["stop"] == stop_before                       # stop untouched by the switch
-    assert bot.pos["entry_x"] == pytest.approx(entry_x * 5)     # chart positions rescaled to 1-minute bars
+    assert bot.pos["entry_x"] == pytest.approx(entry_x * 0.5)   # chart positions rescaled to 10-minute bars
     assert bot.history.index.max().date() < clock["t"].date()
 
     bot.step()                                                  # catch-up redraw only
     assert bot.pos and bot.pos["stop"] == stop_before and len(bot.pos["stop_steps"]) == steps_before
     st = bot.status()
-    assert st["bar_minutes"] == 1 and st["pending_bars"] is None and 1 in st["bar_sizes"]
-    assert max(b["x"] for b in st["bars"]) < 390 and len(st["bars"]) > 60
+    assert st["bar_minutes"] == 10 and st["pending_bars"] is None and 10 in st["bar_sizes"]
+    assert max(b["x"] for b in st["bars"]) < 390 and len(st["bars"]) > 6
 
     stops = [bot.pos["stop"]]
     while bot.pos and t.time() < live._t("15:50"):
@@ -154,14 +154,14 @@ def test_dropdown_endpoint_needs_the_page_token(tmp_path):
         page = urllib.request.urlopen(url).read().decode()
         assert "window.__CONTROL__ =" in page and d.token in page
         base = f"http://127.0.0.1:{d.port}/"
-        assert _post(base, {"minutes": 1})[0] == 403                           # no token (e.g. another website)
-        assert _post(base, {"minutes": 1}, token="guess")[0] == 403
-        assert _post(base, {"minutes": 1}, token=d.token, host="evil.example:%d" % d.port)[0] == 403
+        assert _post(base, {"minutes": 10})[0] == 403                           # no token (e.g. another website)
+        assert _post(base, {"minutes": 10}, token="guess")[0] == 403
+        assert _post(base, {"minutes": 10}, token=d.token, host="evil.example:%d" % d.port)[0] == 403
         assert bot.pending_bm is None
         code, res = _post(base, {"minutes": 2}, token=d.token)                 # Public: no 2-minute bars
         assert code == 400 and "Public offers" in res["message"]
-        code, res = _post(base, {"minutes": 1}, token=d.token)
-        assert code == 200 and "1-minute" in res["message"] and bot.pending_bm == 1
+        code, res = _post(base, {"minutes": 10}, token=d.token)
+        assert code == 200 and "10-minute" in res["message"] and bot.pending_bm == 10
         assert bot.bm == 5                                                     # applied later by the main loop
     finally:
         d.stop()
@@ -172,7 +172,7 @@ def test_no_dropdown_when_turned_off_or_in_snapshots(tmp_path):
     url = d.start()
     try:
         assert "window.__CONTROL__ =" not in urllib.request.urlopen(url).read().decode()
-        assert _post(f"http://127.0.0.1:{d.port}/", {"minutes": 1}, token=d.token)[0] == 403
+        assert _post(f"http://127.0.0.1:{d.port}/", {"minutes": 10}, token=d.token)[0] == 403
         d.update({"symbol": "NVDA"})
         assert "window.__CONTROL__ =" not in d.snapshot(tmp_path / "s.html").read_text()
     finally:
@@ -194,17 +194,17 @@ def test_lan_viewers_get_no_control_unless_allowed(tmp_path, monkeypatch):
         monkeypatch.setattr(http.server.BaseHTTPRequestHandler, "__init__", from_phone)
         assert "window.__CONTROL__ =" not in urllib.request.urlopen(url).read().decode()
         base = f"http://127.0.0.1:{d.port}/"
-        assert _post(base, {"minutes": 1}, token=d.token)[0] == 403            # no key
+        assert _post(base, {"minutes": 10}, token=d.token)[0] == 403            # no key
         assert _post_key(base, "k3y-k3y-k3y", d.token)[0] == 403 and bot.pending_bm is None
         d.lan_control = True                                                   # dashboard_lan_control: true
         assert "window.__CONTROL__ =" in urllib.request.urlopen(url).read().decode()
-        assert _post_key(base, "k3y-k3y-k3y", d.token)[0] == 200 and bot.pending_bm == 1
+        assert _post_key(base, "k3y-k3y-k3y", d.token)[0] == 200 and bot.pending_bm == 10
     finally:
         d.stop()
 
 
 def _post_key(base, key, token):
-    req = urllib.request.Request(base + "bar-size?key=" + key, data=b'{"minutes": 1}', method="POST",
+    req = urllib.request.Request(base + "bar-size?key=" + key, data=b'{"minutes": 10}', method="POST",
                                  headers={"Content-Type": "application/json", "X-Swingbot-Token": token})
     try:
         with urllib.request.urlopen(req) as r:

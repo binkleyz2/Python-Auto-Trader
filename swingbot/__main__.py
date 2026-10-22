@@ -86,10 +86,15 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     _env()
-    cfg = Config.load(args.config)
-    if args.bars:
-        cfg.bar_minutes = args.bars
-        cfg.validate()
+    try:
+        cfg = Config.load(args.config)
+        if args.bars:
+            cfg.bar_minutes = args.bars
+            cfg.validate()
+    except ValueError as e:
+        sys.exit(f"Problem in {args.config}: {e}")
+    from .data import set_public_rate
+    set_public_rate(cfg.public_rate_limit)
     workdir = Path.cwd()
 
     if args.command in ("demo", "backtest"):

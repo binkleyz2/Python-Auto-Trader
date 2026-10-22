@@ -34,12 +34,17 @@ class OneMinClient:
 
 
 def test_config_bar_sizes():
-    Config(bar_minutes=1).validate()
+    Config(bar_minutes=1, broker="alpaca").validate()
     with pytest.raises(ValueError):
         Config(bar_minutes=7).validate()
     with pytest.raises(ValueError):
         Config(bar_minutes=2, broker="public").validate()       # Public has no 2-minute bars
+    with pytest.raises(ValueError, match="no 1-, 2- or 3-minute history"):
+        Config(bar_minutes=1, broker="public").validate()       # Public's 1-minute bars cover today only
+    with pytest.raises(ValueError):
+        Config(bar_minutes=3, broker="alpaca", price_data="public").validate()
     Config(bar_minutes=2, broker="alpaca").validate()
+    Config(bar_minutes=5, broker="alpaca", price_data="public").validate()
 
 
 def test_public_aggregation_mapping():

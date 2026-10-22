@@ -45,7 +45,7 @@ def test_downloads_ten_at_a_time_and_skips_failures(tmp_path):
     got = bot.fetch_many(syms, "WEEK")
     took = time.monotonic() - t0
     assert c.order[0] == "S000"                          # first request alone (sign-in happens once)
-    assert c.peak == 10                                  # never more than scan_workers at once
+    assert c.peak == 8                                   # scan_workers, capped at 8 (Public paces requests)
     assert took < 1.5                                    # one at a time would take 5 s
     assert list(got) == [s for s in syms if s != "S050"] # failure skipped, watchlist order kept
     assert all(len(df) == 20 for df in got.values())

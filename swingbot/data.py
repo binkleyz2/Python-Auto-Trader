@@ -102,20 +102,69 @@ def _public_aggregation(minutes: int):
     return BarAggregation[table[minutes]]
 
 
+class RateLimiter:
+    """At most ``per_second`` calls per second, shared by every thread that uses it."""
+
+    def __init__(self, per_second: float):
+        import threading
+        self.gap = 1.0 / per_second if per_second > 0 else 0.0
+        self._next = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        import time as _tm
+        with self._lock:
+            now = _tm.monotonic()
+            start = max(now, self._next)
+            self._next = start + self.gap
+        if start > now:
+            _tm.sleep(start - now)
+
+
+PUBLIC_LIMIT = RateLimiter(8)            # Public refuses bursts (2026-10-22: 401s at ~25 requests/s)
+
+
+def set_public_rate(per_second: float) -> None:
+    global PUBLIC_LIMIT
+    PUBLIC_LIMIT = RateLimiter(per_second)
+
+
+def _public_call(client, fn):
+    """Run one Public market-data request: paced, and retried after a pause if Public pushes back
+    (401 Unauthorized during a burst, 429 Too Many Requests). A 400 is a real answer and is raised."""
+    import time as _tm
+    for attempt in range(4):
+        PUBLIC_LIMIT.wait()
+        try:
+            return fn()
+        except Exception as e:
+            code = getattr(e, "status_code", None)
+            if code not in (401, 429) or attempt == 3:
+                raise
+            if code == 401 and attempt == 2:                      # still refused: get a fresh token
+                try:
+                    client.auth_manager.revoke_current_token()
+                    client.auth_manager.refresh_token_if_needed()
+                except Exception:
+                    pass
+            _tm.sleep(1.0 + 2.0 * attempt)
+
+
 def fetch_public(client, symbol: str, period: str = "WEEK", minutes: int = 5) -> pd.DataFrame:
     """Regular-hours bars of ``minutes`` for ``symbol`` over ``period`` (DAY, WEEK, MONTH...)."""
-    from public_api_sdk import BarAggregation, BarPeriod, TradingSessionToggle
+    from public_api_sdk import BarPeriod, TradingSessionToggle
 
-    resp = client.get_bars(
-        symbol,
-        BarPeriod[period],
-        aggregation=_public_aggregation(minutes),
-        trading_session_toggle=TradingSessionToggle.REGULAR_HOURS,
-    )
+    agg = _public_aggregation(minutes)
+    resp = _public_call(client, lambda: client.get_bars(
+        symbol, BarPeriod[period], aggregation=agg,
+        trading_session_toggle=TradingSessionToggle.REGULAR_HOURS))
     return bars_from_public(resp)
 
 
-PUBLIC_SIZES = (1, 5, 10, 15, 30)
+# Bar sizes Public can supply for a week of history. Its 1-minute bars cover the current day only
+# ("Period WEEK is not compatible with aggregation ONE_MINUTE"), so 1-, 2- and 3-minute history can't
+# be had from Public.
+PUBLIC_SIZES = (5, 10, 15, 30)
 
 
 def resample_bars(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
@@ -131,20 +180,15 @@ def resample_bars(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
 
 
 def fetch_public_bars(client, symbol: str, period: str = "WEEK", minutes: int = 5) -> pd.DataFrame:
-    """Public bars of any size: 1, 5, 10, 15, 30 directly; 2 and 3 built from 1-minute bars."""
-    if minutes in PUBLIC_SIZES:
-        return fetch_public(client, symbol, period, minutes)
-    try:
-        one = fetch_public(client, symbol, period, 1)
-    except Exception as e:
-        raise RuntimeError(f"Public gave no 1-minute bars for {period} ({e}); {minutes}-minute bars are built "
-                           f"from them - use bar_minutes 1, 5, 10, 15 or 30") from e
-    return resample_bars(one, minutes)
+    """Public bars for the bot: 5, 10, 15 or 30 minutes (the sizes with a week of history)."""
+    if minutes not in PUBLIC_SIZES:
+        raise ValueError(f"Public's price data has no {minutes}-minute history - use bar_minutes 5, 10, 15 or 30")
+    return fetch_public(client, symbol, period, minutes)
 
 
 def public_last_price(client, symbol: str) -> float | None:
     from public_api_sdk import InstrumentType, OrderInstrument
-    q = client.get_quotes([OrderInstrument(symbol=symbol, type=InstrumentType.EQUITY)])
+    q = _public_call(client, lambda: client.get_quotes([OrderInstrument(symbol=symbol, type=InstrumentType.EQUITY)]))
     return float(q[0].last) if q and getattr(q[0], "last", None) is not None else None
 
 

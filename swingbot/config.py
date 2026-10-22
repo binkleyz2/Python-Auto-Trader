@@ -27,10 +27,11 @@ class Config:
     min_price: float = 10.0               # skip stocks under this price
     min_avg_dollar_volume: float = 50e6   # skip thin stocks (avg daily $ volume)
     watch_count: int = 5                  # watch this many top-ranked symbols for entries (1 = only the top pick)
+    public_rate_limit: float = 8.0        # Public price data: at most this many requests per second
     scan_workers: int = 10                # morning scan: download this many symbols' bars at once (1-32)
 
     # --- Bars ---------------------------------------------------------------------
-    bar_minutes: int = 5                  # bar size: 1, 2, 3, 5, 10, 15 or 30 (Public: 1, 5, 10, 15, 30)
+    bar_minutes: int = 5                  # bar size: 1, 2, 3, 5, 10, 15 or 30 (Public data: 5, 10, 15, 30)
 
     # --- Swing / trend line rules ---------------------------------------------
     swing_n: int = 5                      # bars on EACH side that define a swing point (of bar_minutes each)
@@ -90,8 +91,11 @@ class Config:
             raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
         if self.bar_minutes not in (1, 2, 3, 5, 10, 15, 30):
             raise ValueError(f"bar_minutes must be 1, 2, 3, 5, 10, 15 or 30, not {self.bar_minutes!r}")
-        if self.broker == "public" and self.bar_minutes not in (1, 5, 10, 15, 30):
-            raise ValueError("Public offers 1, 5, 10, 15 or 30-minute bars")
+        if self.broker == "public" or self.price_data == "public":
+            if self.bar_minutes not in (5, 10, 15, 30):
+                raise ValueError(f"bar_minutes {self.bar_minutes} isn't available with Public's price data: Public gives "
+                                 "1-minute bars only for the current day, so there is no 1-, 2- or 3-minute history "
+                                 "for the scan and the trend lines. Use bar_minutes 5, 10, 15 or 30.")
 
     @classmethod
     def load(cls, path: str | Path | None) -> "Config":

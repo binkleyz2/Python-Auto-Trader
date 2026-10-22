@@ -52,7 +52,7 @@ python -m swingbot run --bars 1 --symbol NVDA          # dry run: watch only NVD
 python -m swingbot run --bars 1 --symbol NVDA --live   # same, with orders
 ```
 
-`--symbol` skips the morning scan and starts on that symbol right away (for futures, use the contract code, e.g. `MCLZ6`). `--bars` sets the bar size for that run; `bar_minutes` in `config.yaml` sets the default. The rules are unchanged; they're counted in bars, so on 1-minute bars everything happens five times faster: swing points are confirmed after 5 minutes instead of 25, ATR-based stops are tighter, and trend lines only reach back about a day (`max_line_age_bars: 400`). Expect more signals, more noise and more stop-outs, and slippage matters more relative to the smaller stop. Try it in dry run or paper first.
+`--symbol` skips the morning scan and starts on that symbol right away (for futures, use the contract code, e.g. `MCLZ6`). `--bars` sets the bar size for that run; `bar_minutes` in `config.yaml` sets the default. The rules are unchanged; they're counted in bars, so on 1-minute bars everything happens five times faster: swing points are confirmed after 5 minutes instead of 25, ATR-based stops are tighter, and trend lines only reach back about a day (`max_line_age_bars: 400`). Expect more signals, more noise and more stop-outs, and slippage matters more relative to the smaller stop. Try it in dry run or paper first. Bars under 5 minutes need Alpaca's or NinjaTrader's own data: Public's data (`broker: public` or `price_data: public`) has no 1-, 2- or 3-minute history.
 
 Results go to `results/`, daily logs to `logs/`, and the bot's trades to `trades.csv`.
 
@@ -129,7 +129,7 @@ broker: alpaca
 price_data: public      # bars and quotes from Public.com; orders, positions and cash stay at Alpaca
 ```
 
-Both sets of keys go in `.env` (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `PUBLIC_API_SECRET_KEY`, `PUBLIC_ACCOUNT_ID`). Public offers 1, 5, 10, 15 and 30-minute bars; 2 and 3-minute bars are built from its 1-minute bars. The scan downloads `scan_workers` symbols at once from Public, and the volume filter uses Public's bar volume. `price_data: broker` goes back to Alpaca's own feed.
+Both sets of keys go in `.env` (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `PUBLIC_API_SECRET_KEY`, `PUBLIC_ACCOUNT_ID`). Use `bar_minutes` 5, 10, 15 or 30: Public's 1-minute bars cover only the current day, so there is no 1-, 2- or 3-minute history for the scan and the trend lines (the bot refuses to start with those sizes). Public refuses bursts of requests (it answers "401 Unauthorized"), so its requests are paced to `public_rate_limit` per second (default 8) and retried after a pause if refused; the scan of 300 symbols takes about 40 seconds, 1,400 about 3 minutes. The volume filter uses Public's bar volume. `price_data: broker` goes back to Alpaca's own feed.
 
 ## Using NinjaTrader for futures
 

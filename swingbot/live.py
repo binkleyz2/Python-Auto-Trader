@@ -286,10 +286,12 @@ class Bot:
         return x_of(ts, self.bm)
 
     def fetch_many(self, symbols: list[str], period: str) -> dict[str, pd.DataFrame]:
-        """Bars for many symbols, ``scan_workers`` downloads at a time. A symbol that fails is
-        logged and left out; the rest carry on. Results keep the watchlist order."""
+        """Bars for many symbols, ``scan_workers`` downloads at a time (at most 8: Public paces requests
+        anyway). A symbol that fails is left out; the rest carry on. Results keep the watchlist order."""
         symbols = list(dict.fromkeys(symbols))
         got: dict[str, pd.DataFrame] = {}
+        failed: list[tuple[str, str]] = []
+        lock = threading.Lock()
         if not symbols:
             return got
 
@@ -297,23 +299,38 @@ class Bot:
             try:
                 got[sym] = self.fetch_bars(sym, period)
             except Exception as e:
-                log.warning("bars for %s failed: %s", sym, e)
+                with lock:
+                    failed.append((sym, str(e)))
+                    if len(failed) <= 5:
+                        log.warning("bars for %s failed: %s", sym, e)
 
         one(symbols[0])                       # first one alone: signs in / refreshes the token once
         rest = symbols[1:]
-        workers = max(1, min(int(self.cfg.scan_workers), len(rest) or 1))
+        workers = max(1, min(int(self.cfg.scan_workers), 8, len(rest) or 1))
         with ThreadPoolExecutor(workers, thread_name_prefix="scan") as ex:
             futs = [ex.submit(one, s) for s in rest]
             for i, _ in enumerate(as_completed(futs), 2):
                 if i % 100 == 0:
                     log.info("scan: %d of %d symbols downloaded", i, len(symbols))
                     self.publish(f"Scanning: {i} of {len(symbols)}")
+        if len(failed) > 5:
+            kinds = {}
+            for _, msg in failed:
+                kinds[msg[:90]] = kinds.get(msg[:90], 0) + 1
+            top = sorted(kinds.items(), key=lambda kv: -kv[1])[:3]
+            log.warning("...and %d more symbols failed. Most common: %s", len(failed) - 5,
+                        "; ".join(f"{n}x {m}" for m, n in top))
+        if symbols and not got:
+            log.error("No price data for any of the %d symbols - the bot can't scan or trade. "
+                      "See the errors above (keys in .env, data source, bar size).", len(symbols))
         return {s: got[s] for s in symbols if s in got}
 
     # --------------------------------------------------- bar size on demand
     def bar_sizes(self) -> list[int]:
         """Bar sizes this broker can supply."""
-        return [1, 5, 10, 15, 30] if self.broker_name == "Public" else [1, 2, 3, 5, 10, 15, 30]
+        if self.broker_name == "Public" or self.cfg.price_data == "public":
+            return [5, 10, 15, 30]                     # Public has no 1-3 minute history
+        return [1, 2, 3, 5, 10, 15, 30]
 
     def request_bar_size(self, minutes: int) -> str:
         """Ask for a new bar size (called from the dashboard thread). Returns a message for the page.
