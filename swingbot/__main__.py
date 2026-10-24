@@ -173,6 +173,9 @@ def main(argv=None) -> None:
                 from datetime import date
                 snap = dash.snapshot(workdir / "logs" / f"{date.today()}-dashboard.html")
                 logging.getLogger("swingbot").info("Dashboard snapshot saved: %s", snap)
+                if cfg.dashboard_jpg:
+                    from .screenshot import save_jpg
+                    save_jpg(snap, cfg.dashboard_jpg_browser)
                 dash.stop()
     finally:
         client.close()

@@ -68,6 +68,7 @@ dashboard_port: 8765
 dashboard_open_browser: true
 dashboard_lan: true        # true = phones/PCs on your home network can view it (needs the key)
 dashboard_key:            # set your own key to bookmark the address; blank = new random key each run
+dashboard_jpg: true        # also save a picture of the end-of-day page: logs/<date>-dashboard.jpg
 
 # Backtest
 starting_equity: 25000

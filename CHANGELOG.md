@@ -1,8 +1,20 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.4.2 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.5.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.5.0 – 2026-10-24
+
+- **Picture of the end-of-day dashboard:** besides `logs/<date>-dashboard.html`, the bot now saves
+  `logs/<date>-dashboard.jpg`, the whole page as one image (chart, trades, settings, activity). It's drawn by
+  the Edge or Chrome already on the PC, started hidden; no window opens and nothing is downloaded.
+  - `dashboard_jpg: true` in `config.yaml` (set `false` to turn it off). `dashboard_jpg_browser` can name a
+    browser if the automatic search doesn't find one.
+  - If the picture can't be made, the log says why; the bot and the .html copy are unaffected.
+  - For snapshots from earlier days: `py -m swingbot.screenshot logs\2026-10-23-dashboard.html` (several
+    files at once work too).
+- New requirement: `pillow`. Run `py -m pip install --user -r requirements.txt` once.
 
 ## v1.4.2 – 2026-10-22
 

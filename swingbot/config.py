@@ -76,6 +76,8 @@ class Config:
     dashboard_key: str = ""               # access key for network viewers (random each run if left blank)
     dashboard_bar_control: bool = True    # show the bar-size dropdown on the page (on this PC only)
     dashboard_lan_control: bool = False   # True = network viewers (with the key) can use the dropdown too
+    dashboard_jpg: bool = True            # also save logs/<date>-dashboard.jpg at the end of the day
+    dashboard_jpg_browser: str = ""       # Edge/Chrome to draw it with (blank = find it automatically)
 
     # --- Backtest only -------------------------------------------------------------
     starting_equity: float = 25_000.0
