@@ -1,8 +1,19 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.5.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.5.1 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.5.1 – 2026-10-24
+
+- **`config.yaml` is no longer part of the repository, so `git pull` never touches your settings.** The
+  repository has `config.example.yaml` instead, and Git ignores `config.yaml`.
+  - On the first run with no `config.yaml`, the bot copies the example to `config.yaml`.
+  - New settings in future versions are added to the example and listed here. At startup the log names
+    any setting your `config.yaml` doesn't have yet; the bot uses its default until you copy it over.
+- **Updating to this version:** back up your `config.yaml` first (`copy config.yaml config.mine.yaml`),
+  because Git removes its copy of the file during this one pull. Then put yours back
+  (`move /Y config.mine.yaml config.yaml`).
 
 ## v1.5.0 – 2026-10-24
 

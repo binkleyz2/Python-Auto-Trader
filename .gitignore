@@ -9,3 +9,5 @@ trades.csv
 __pycache__/
 *.pyc
 .pytest_cache/
+# your own settings (start from config.example.yaml)
+config.yaml

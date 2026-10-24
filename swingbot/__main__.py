@@ -28,6 +28,28 @@ def _env():
         pass
 
 
+EXAMPLE = "config.example.yaml"
+
+
+def _first_config(path: Path) -> None:
+    """A fresh copy has config.example.yaml but no config.yaml yet: start from the example."""
+    if not path.exists() and path.name == "config.yaml" and (path.parent / EXAMPLE).exists():
+        import shutil
+        shutil.copyfile(path.parent / EXAMPLE, path)
+        print(f"Created {path} from {EXAMPLE}. Edit config.yaml for your settings; updates never change it.\n")
+
+
+def _new_settings(path: Path) -> list[str]:
+    """Settings in config.example.yaml that your config.yaml doesn't have (the bot uses their defaults)."""
+    try:
+        import yaml
+        ex = yaml.safe_load((path.parent / EXAMPLE).read_text(encoding="utf-8-sig")) or {}
+        mine = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        return [k for k in ex if k not in mine]
+    except Exception:
+        return []
+
+
 def _logging(workdir: Path) -> None:
     from datetime import date
     (workdir / "logs").mkdir(exist_ok=True)
@@ -89,6 +111,7 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     _env()
+    _first_config(Path(args.config))
     try:
         cfg = Config.load(args.config)
         if args.bars:
@@ -123,6 +146,11 @@ def main(argv=None) -> None:
     from .live import is_weekday, wait_for_open
     from .data import append_csv
     _logging(workdir)
+    new = _new_settings(Path(args.config))
+    if new:
+        logging.getLogger("swingbot").info(
+            "Settings in %s that your %s doesn't have (defaults used; copy them over to change them): %s",
+            EXAMPLE, Path(args.config).name, ", ".join(new))
     if cfg.broker == "ninjatrader":
         from .ninja_live import NinjaBot as BotClass, make_ninja_client
         client = make_ninja_client(cfg, workdir)

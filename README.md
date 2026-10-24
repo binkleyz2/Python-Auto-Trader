@@ -34,6 +34,8 @@ pip install -r requirements.txt
 cp .env.example .env                                     # then paste your secret key and account ID
 ```
 
+**Your settings live in `config.yaml`.** It isn't part of the download: on the first run the bot copies `config.example.yaml` to `config.yaml`, and from then on that file is yours. `git pull` never changes it. When an update adds a setting, it's added to `config.example.yaml` and listed in `CHANGELOG.md`, and the log's startup lines name any setting your `config.yaml` doesn't have yet (its default is used). Copy a setting across only if you want a different value.
+
 To get the secret key, go to public.com → Settings → Security → API. To find your account ID, put a placeholder such as `x` as the account ID, then run `python -c "from dotenv import load_dotenv; load_dotenv(); from swingbot.live import make_client; print(make_client().get_accounts())"`, or look it up in the app.
 
 ## Commands

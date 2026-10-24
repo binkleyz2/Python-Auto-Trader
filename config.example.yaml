@@ -1,4 +1,7 @@
-# Edit these to tune the bot. Anything left out uses the default in swingbot/config.py.
+# Example settings. The bot reads config.yaml, not this file: on the first run it copies this file to
+# config.yaml. Edit config.yaml; updates from GitHub never change it. When an update adds a setting, it
+# appears here and in CHANGELOG.md, and the log lists it at startup; copy it into config.yaml to change it.
+# Anything left out of config.yaml uses the default in swingbot/config.py.
 
 # Broker: "public" or "alpaca"
 broker: alpaca

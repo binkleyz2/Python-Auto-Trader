@@ -119,13 +119,31 @@ def test_shipped_lists_load():
     from swingbot.config import read_watchlist
     sp = read_watchlist(Path(__file__).parent.parent / "watchlist_sp100.yaml")
     assert len(sp) == 100 and "BRK.B" in sp and "GOOG" not in sp
-    # config.yaml is yours: check every setting in it is valid, with the list file it names stubbed in
+    # the shipped example (and your own config.yaml, if there is one) must load, list file stubbed in
     import shutil, tempfile
-    root = Path(__file__).parent.parent
-    d = Path(tempfile.mkdtemp())
-    shutil.copy(root / "config.yaml", d / "config.yaml")
     import yaml
-    lf = (yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8")) or {}).get("watchlist_file")
-    if lf and not (d / lf).exists():
-        (d / lf).write_text("watchlist: [AAPL]\n", encoding="utf-8")
-    Config.load(d / "config.yaml")
+    root = Path(__file__).parent.parent
+    for name in ("config.example.yaml", "config.yaml"):
+        if not (root / name).exists():
+            assert name == "config.yaml"
+            continue
+        d = Path(tempfile.mkdtemp())
+        shutil.copy(root / name, d / "config.yaml")
+        lf = (yaml.safe_load((root / name).read_text(encoding="utf-8-sig")) or {}).get("watchlist_file")
+        if lf and not (d / lf).exists():
+            (d / lf).write_text("watchlist: [AAPL]\n", encoding="utf-8")
+        Config.load(d / "config.yaml")
+
+
+def test_first_run_copies_the_example_and_lists_new_settings(tmp_path):
+    from swingbot.__main__ import _first_config, _new_settings
+    (tmp_path / "config.example.yaml").write_text("watchlist: [AAPL]\nwatch_count: 5\ndashboard_jpg: true\n",
+                                                  encoding="utf-8")
+    mine = tmp_path / "config.yaml"
+    _first_config(mine)
+    assert mine.read_text(encoding="utf-8") == (tmp_path / "config.example.yaml").read_text(encoding="utf-8")
+    assert _new_settings(mine) == []
+    mine.write_text("watchlist: [MSFT]\nwatch_count: 3\n", encoding="utf-8")
+    _first_config(mine)                                     # never overwrites your file
+    assert "MSFT" in mine.read_text(encoding="utf-8")
+    assert _new_settings(mine) == ["dashboard_jpg"]
