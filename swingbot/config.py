@@ -78,6 +78,7 @@ class Config:
     dashboard_lan_control: bool = False   # True = network viewers (with the key) can use the dropdown too
     dashboard_jpg: bool = True            # also save logs/<date>-dashboard.jpg at the end of the day
     dashboard_jpg_browser: str = ""       # Edge/Chrome to draw it with (blank = find it automatically)
+    results_spreadsheet: bool = True      # keep logs/results-<account>.xlsx up to date at the end of each day
 
     # --- Backtest only -------------------------------------------------------------
     starting_equity: float = 25_000.0

@@ -1,8 +1,27 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.5.1 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.6.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.6.0 – 2026-10-24
+
+- **Results spreadsheet** `logs/results-<account>.xlsx` (e.g. `results-alpaca-paper.xlsx`), updated at the
+  end of every session:
+  - **Summary:** starting and latest account value, total change ($ and %), the bot's trade P&L, trades,
+    win rate, best, worst and average day, and a chart of the account value.
+  - **Last 30 days:** one row per trading day: start and end value, change ($ and %), the bot's trade
+    P&L, trades, wins, losses, and the total change since the first day.
+  - **Weekly (older):** the same per Monday-to-Friday week, for days more than 30 days old.
+  - **All days:** every day, for your own sums and charts.
+- Changes and totals are Excel formulas; the recorded numbers are in blue.
+- Only days with orders count (live, or a paper or demo account), not dry runs. One spreadsheet per
+  account, so paper and real-money results never mix.
+- Each day is first added to `logs/daily-results.csv`, the permanent record. Days from before this version
+  are filled in from the `logs/<date>-state.json` files, with the end value estimated (noted on the row).
+- If the spreadsheet is open in Excel when the session ends, the log says so and the next run catches up.
+  `py -m swingbot.history` rebuilds it any time.
+- New setting `results_spreadsheet` (default `true`); copy it from `config.example.yaml` only to turn it off.
 
 ## v1.5.1 – 2026-10-24
 

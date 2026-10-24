@@ -197,6 +197,9 @@ def main(argv=None) -> None:
                 logging.getLogger("swingbot").exception("The bot stopped on an error: %s", e)
                 raise
         finally:
+            if cfg.results_spreadsheet:
+                from .history import record_session
+                record_session(bot, cfg, workdir / "logs")
             if dash:
                 from datetime import date
                 snap = dash.snapshot(workdir / "logs" / f"{date.today()}-dashboard.html")
