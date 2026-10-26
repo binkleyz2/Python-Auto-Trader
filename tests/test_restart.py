@@ -158,3 +158,40 @@ def test_yesterdays_unsold_position_is_reported(tmp_path, monkeypatch):
     assert b.leftover and b.leftover["symbol"] == "AAPL" and b.leftover["shares"] == a.pos["shares"]
     assert b.status()["leftover"]["date"] == str((clock["t"] - pd.Timedelta(days=1)).date())
     assert b.pos is None                                # the bot doesn't adopt it
+
+
+def test_exit_price_comes_from_this_trades_own_orders(tmp_path, monkeypatch):
+    """2026-10-26: BUSE's exit was read from EVRG's earlier sale (84.32), showing +$41,741 on one trade."""
+    new_bot, t, clock = _setup(tmp_path, monkeypatch)
+    a = new_bot(max_trades_per_day=4)
+    a.prepare()
+    clock["t"] = clock["t"].replace(hour=11)
+    t.price = 84.30
+    a.enter(84.30, 83.90, "bounce")
+    t.trigger_stop(84.32)                                   # first trade's stop fills at 84.32
+    a._check_live_exit()
+    assert a.closed[-1]["exit"] == 84.32
+    clock["t"] = clock["t"].replace(hour=14)
+    t.price = 30.46
+    a.enter(30.47, 30.39, "bounce")
+    assert set(a.pos["ids_before"]) and set(a.pos["ids_before"]) <= set(map(str, a.my_order_ids))
+    b = new_bot(max_trades_per_day=4)                      # survives a restart too
+    b.prepare()
+    t.trigger_stop(30.40)
+    b._check_live_exit()
+    assert b.closed[-1]["exit"] == 30.40
+    assert abs(b.closed[-1]["pnl"] - (30.40 - 30.46) * b.closed[-1]["shares"]) < 0.01
+
+
+def test_a_sale_price_that_cannot_be_right_is_not_used(tmp_path, monkeypatch, caplog):
+    new_bot, t, clock = _setup(tmp_path, monkeypatch)
+    a = new_bot()
+    a.prepare()
+    clock["t"] = clock["t"].replace(hour=11)
+    t.price = 30.46
+    a.enter(30.47, 30.39, "bounce")
+    t.trigger_stop(30.40)
+    a.last_close = 30.41
+    monkeypatch.setattr(a, "_filled_sell_price", lambda ids: 84.32)
+    a._check_live_exit()
+    assert a.closed[-1]["exit"] == 30.41 and "doesn't fit" in caplog.text

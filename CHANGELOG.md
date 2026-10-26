@@ -1,8 +1,23 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.6.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.6.1 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.6.1 – 2026-10-26
+
+Fix: a trade's sale price could be read from an earlier trade's order (BUSE, 2026-10-26).
+
+- When the broker's stop or target sells the shares, the bot looks up the sale price among its orders. It
+  looked at **all of the day's orders**, so BUSE's sale was read as EVRG's earlier sale at 84.32 instead of
+  about $30. The dashboard showed +$41,741.50 for the trade and +$41,606.11 for the day; the account itself
+  was right. Only the records were wrong: no order was affected.
+- Now only the open trade's own orders count (its entry, stop and target legs, replaced stops and its
+  sale), for the right symbol, averaged over partial fills. A sale price below half or above twice the
+  entry price is rejected with a warning and the last price is used instead.
+- **`py -m swingbot.fix_exit DATE SYMBOL [PRICE]`** corrects a recorded trade: the state file, `trades.csv`,
+  the end-of-day dashboard copy (.html and .jpg) and the results spreadsheet. With Alpaca it looks the real
+  fills up; with other brokers give the price.
 
 ## v1.6.0 – 2026-10-24
 

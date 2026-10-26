@@ -325,16 +325,21 @@ class AlpacaBot(Bot):
         return oid, None
 
     def _filled_sell_price(self, order_ids) -> float | None:
-        price = None
+        """Average price of this symbol's filled sells among `order_ids` (weighted by shares)."""
+        qty = value = 0.0
         for oid in order_ids:
             try:
                 o = self.client.trading.get_order_by_id(oid)
             except Exception:
                 continue
-            if (_v(o.side).lower() == "sell" and _v(o.status).lower() == "filled"
-                    and getattr(o, "filled_avg_price", None) is not None):
-                price = float(o.filled_avg_price)
-        return price
+            sym = getattr(o, "symbol", None)
+            if sym and self.symbol and str(sym).upper() != self.symbol.upper():
+                continue
+            if _v(o.side).lower() == "sell" and getattr(o, "filled_avg_price", None) is not None \
+                    and float(getattr(o, "filled_qty", 0) or 0) > 0:
+                q = float(o.filled_qty)
+                qty, value = qty + q, value + q * float(o.filled_avg_price)
+        return round(value / qty, 4) if qty else None
 
 
 def _is_not_found(e) -> bool:

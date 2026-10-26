@@ -938,6 +938,7 @@ class Bot:
 
         base_qty = self.held_quantity()          # shares you already owned - never touched
         entry_time = datetime.now(ZoneInfo("UTC"))
+        pos["ids_before"] = sorted(map(str, self.my_order_ids))   # orders from earlier trades: not this one's
         try:
             _, fill_price = self._submit_entry(shares, stop_d, tgt_d, entry_ref)
         except Exception as e:
@@ -1093,16 +1094,29 @@ class Bot:
         """Live: notice when the broker's stop (or target) has sold the bot's shares."""
         if not (self.live and self.pos) or self.bot_shares() > 0:
             return
-        ids = set(self.my_order_ids)
+        ids = self._position_order_ids()
         try:                                             # include bracket legs the broker created
-            ids |= {o.id for o in self._orders() if o.parent and o.parent in self.my_order_ids}
+            ids |= {o.id for o in self._orders() if o.parent and o.parent in ids}
         except Exception:
             pass
-        price = self._filled_sell_price(list(ids))
+        price = self._filled_sell_price(sorted(ids))
+        entry = self.pos["entry"]
+        if price is not None and not (0.5 * entry <= price <= 2 * entry):
+            log.warning("%s: sale price %.2f found for an entry at %.2f doesn't fit - using the last price %.2f "
+                        "instead; check the fill in your broker's app.", self.symbol, price, entry, self.last_close)
+            price = None
         if price is None:
             price = self.last_close
         reason = "target" if (self.pos["target"] and price >= self.pos["target"]) else "stop"
         self._close_pos(price, reason)
+
+    def _position_order_ids(self) -> set[str]:
+        """The open position's own orders: entry, stop/target legs, replaced stops, its sale.
+        2026-10-26: all of the day's orders were used, so BUSE's exit was read from EVRG's earlier
+        sale (84.32 instead of about 30.67) and the day showed +$41,606."""
+        ids = set(map(str, self.my_order_ids))
+        before = (self.pos or {}).get("ids_before")
+        return ids - set(before) if before is not None else ids
 
     # ----------------------------------------------------------- exits & logging
     last_close: float = float("nan")
