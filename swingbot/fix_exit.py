@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 
 
-def _alpaca_price(cfg, day: str, sym: str, t_in: str, t_out: str) -> float:
+def _alpaca_price(cfg, day: str, sym: str, t_in: str, t_out: str, side: int = 1) -> float:
     from alpaca.trading.enums import QueryOrderStatus
     from alpaca.trading.requests import GetOrdersRequest
     from .alpaca_live import make_alpaca_client
@@ -39,9 +39,9 @@ def _alpaca_price(cfg, day: str, sym: str, t_in: str, t_out: str) -> float:
         orders += [o] + list(getattr(o, "legs", None) or [])
     qty = value = 0.0
     for o in orders:
-        side = str(getattr(o.side, "value", o.side)).lower()
+        o_side = str(getattr(o.side, "value", o.side)).lower()
         filled_at = getattr(o, "filled_at", None)
-        if side == "sell" and float(o.filled_qty or 0) > 0 and o.filled_avg_price is not None \
+        if o_side == ("sell" if side > 0 else "buy") and float(o.filled_qty or 0) > 0 and o.filled_avg_price is not None \
                 and filled_at is not None and start <= filled_at <= end:
             qty += float(o.filled_qty)
             value += float(o.filled_qty) * float(o.filled_avg_price)
@@ -54,11 +54,11 @@ def _alpaca_price(cfg, day: str, sym: str, t_in: str, t_out: str) -> float:
 def _fix_trade(t: dict, price: float, point_value: float = 1.0) -> tuple[float, float]:
     old = t["exit"]
     t["exit"] = price
-    t["pnl"] = round((price - t["entry"]) * t["shares"] * point_value, 2)
+    t["pnl"] = round((price - t["entry"]) * t["shares"] * point_value * int(t.get("side", 1)), 2)
     return old, t["pnl"]
 
 
-def _reason(tc: Path, day: str, sym: str, old_exit: float, price: float, was: str) -> str:
+def _reason(tc: Path, day: str, sym: str, old_exit: float, price: float, was: str, side: int = 1) -> str:
     """Target, trail or stop for the corrected price, from the order levels in trades.csv."""
     if not tc.exists():
         return was
@@ -73,9 +73,9 @@ def _reason(tc: Path, day: str, sym: str, old_exit: float, price: float, was: st
                     return was
                 if was in ("end of day", "kill switch"):
                     return was
-                if target is not None and price >= target - 0.005:
+                if target is not None and side * (price - target) >= -0.005:
                     return "target"
-                return "trail" if stop > init else "stop"
+                return "trail" if side * (stop - init) > 0 else "stop"
     return was
 
 
@@ -101,13 +101,13 @@ def main(argv=None) -> None:
     if price is None:
         if cfg.broker != "alpaca":
             sys.exit(f"Give the price you were filled at:  py -m swingbot.fix_exit {day} {sym} PRICE")
-        price = _alpaca_price(cfg, day, sym, t["entry_time"], t["exit_time"])
+        price = _alpaca_price(cfg, day, sym, t["entry_time"], t["exit_time"], int(t.get("side", 1)))
     pv = 1.0
     if cfg.broker == "ninjatrader" and t.get("entry"):
-        pv = (t["pnl"] / ((t["exit"] - t["entry"]) * t["shares"])) if t["exit"] != t["entry"] else 1.0
+        pv = abs(t["pnl"] / ((t["exit"] - t["entry"]) * t["shares"])) if t["exit"] != t["entry"] else 1.0
     old_exit, old_pnl = t["exit"], t["pnl"]
     _fix_trade(t, price, pv)
-    t["reason"] = _reason(Path("trades.csv"), day, sym, old_exit, price, t["reason"])
+    t["reason"] = _reason(Path("trades.csv"), day, sym, old_exit, price, t["reason"], int(t.get("side", 1)))
     sp.write_text(json.dumps(st, indent=1, default=str), encoding="utf-8")
     print(f"{sym} {day}: exit {old_exit:.2f} -> {price:.2f}, P&L {old_pnl:,.2f} -> {t['pnl']:,.2f}")
 

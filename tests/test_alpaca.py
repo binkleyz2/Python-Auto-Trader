@@ -33,6 +33,7 @@ class FakeTrading:
         self.sent = []
         self.stops_seen = []        # open stop orders after each change while holding
         self.fail_position = False
+        self.shorting_enabled, self.shortable, self.easy_to_borrow = True, True, True
 
     def _mk(self, side, typ, qty, status="new", stop=None, limit=None, top=True):
         o = SimpleNamespace(id=uuid.uuid4(), symbol="AAPL", side=side, order_type=typ, type=typ, qty=str(qty),
@@ -59,15 +60,19 @@ class FakeTrading:
             o = self._mk(side, "market", qty, status="filled")
             o.filled_qty, o.filled_avg_price = str(qty), str(self.price)
             self.pos["AAPL"] += qty if side == "buy" else -qty
-            if side == "buy" and req.order_class is not None and _v(req.order_class) == "bracket":
-                tp = self._mk("sell", "limit", qty, status="new", limit=req.take_profit.limit_price, top=False)
-                sl = self._mk("sell", "stop", qty, status="held", stop=req.stop_loss.stop_price, top=False)
+            if req.order_class is not None and _v(req.order_class) == "bracket":
+                ex = "sell" if side == "buy" else "buy"         # a short's legs buy back
+                tp = self._mk(ex, "limit", qty, status="new", limit=req.take_profit.limit_price, top=False)
+                sl = self._mk(ex, "stop", qty, status="held", stop=req.stop_loss.stop_price, top=False)
                 tp.parent = sl.parent = o
                 o.legs = [tp, sl]
         else:
             o = self._mk(side, typ, qty, stop=getattr(req, "stop_price", None))
         self._note()
         return o
+
+    def get_asset(self, sym):
+        return SimpleNamespace(symbol=sym, shortable=self.shortable, easy_to_borrow=self.easy_to_borrow)
 
     def get_order_by_id(self, oid):
         return self.all[str(oid)]
@@ -108,12 +113,13 @@ class FakeTrading:
     def get_account(self):
         return SimpleNamespace(equity="25000", cash=str(self.cash), non_marginable_buying_power=str(self.cash),
                                buying_power=str(self.cash * 4), multiplier="4", account_number="PA123",
+                               shorting_enabled=self.shorting_enabled,
                                trading_blocked=False, account_blocked=False, trade_suspended_by_user=False)
 
     def trigger_stop(self, at):
         for o in self.open_stops():
             o.status, o.filled_qty, o.filled_avg_price = "filled", o.qty, str(at)
-            self.pos["AAPL"] -= int(o.qty)
+            self.pos["AAPL"] += int(o.qty) if o.side == "buy" else -int(o.qty)
             for leg in (o.parent.legs if o.parent else []):
                 if leg is not o and leg.status in ("new", "held"):
                     leg.status = "canceled"
@@ -382,3 +388,129 @@ def test_flatten_failure_never_raises_and_is_reported(tmp_path, monkeypatch):
     bot.enter(50.0, 49.0, "bounce")
     bot.flatten("end of day")                           # must not raise
     assert t.pos["AAPL"] == 125 and bot.pos and bot.still_holding() == 125
+
+
+
+# ---------------------------------------------------------------- shorts (direction: short / both)
+def _sbot(tmp_path, monkeypatch, **kw):
+    bot, t = _bot(tmp_path, monkeypatch, **kw)
+    monkeypatch.setattr(bot, "_last_trade_price", lambda: t.price)   # the fake's price, not the bars'
+    return bot, t
+
+def test_short_entry_is_a_sell_bracket_with_buy_stop_above(tmp_path, monkeypatch):
+    bot, t = _sbot(tmp_path, monkeypatch, direction="both")
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    req = t.sent[0]
+    assert _v(req.order_class) == "bracket" and _v(req.side) == "sell" and int(req.qty) == 125
+    assert req.stop_loss.stop_price == 51.0 and req.take_profit.limit_price == 25.0   # parked 50% below
+    assert t.pos["AAPL"] == -125 and bot.held_quantity() == -125 and bot.bot_shares() == 125
+    assert bot.pos["side"] == -1 and len(t.sent) == 1          # the bracket's buy stop was found
+    stop = t.open_stops()[0]
+    assert stop.side == "buy" and stop.stop_price == 51.0
+
+
+def test_short_stop_trails_down_only_and_exit_pnl_is_right(tmp_path, monkeypatch):
+    bot, t = _sbot(tmp_path, monkeypatch, direction="short")
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    bot.raise_stop(50.40)
+    bot.raise_stop(50.70)                                        # looser: ignored, a stop never moves back
+    bot.raise_stop(49.80)
+    stops = t.open_stops()
+    assert len(stops) == 1 and stops[0].stop_price == 49.8 and min(t.stops_seen) >= 1
+    t.trigger_stop(at=49.80)
+    bot._check_live_exit()
+    c = bot.closed[-1]
+    assert bot.pos is None and c["reason"] == "trail" and c["exit"] == 49.8 and c["side"] == -1
+    assert c["pnl"] == pytest.approx((50.0 - 49.8) * 125)       # profit when the price falls
+
+
+def test_short_flatten_buys_back_only_the_bots_shares(tmp_path, monkeypatch):
+    bot, t = _sbot(tmp_path, monkeypatch, direction="short")
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    t.price = 50.5
+    bot.flatten("end of day")
+    covers = [r for r in t.sent if _v(r.side) == "buy" and _v(r.type) == "market"]
+    assert len(covers) == 1 and int(covers[0].qty) == 125
+    assert t.pos["AAPL"] == 0 and not t.open_stops() and bot.pos is None
+    assert bot.closed[-1]["pnl"] == pytest.approx(-0.5 * 125)
+
+
+def test_short_skipped_when_not_allowed(tmp_path, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    for attr, why in (("shorting_enabled", "isn't enabled"), ("shortable", "not shortable"),
+                      ("easy_to_borrow", "hard to borrow")):
+        t = FakeTrading()
+        setattr(t, attr, False)
+        bot, t = _sbot(tmp_path, monkeypatch, trading=t, direction="short")
+        bot.enter(50.0, 51.0, "short bounce", side=-1)
+        assert not t.sent and bot.pos is None and bot.trades_today == 0 and why in caplog.text
+
+
+def test_short_needs_a_flat_position_and_is_limited_to_the_account_value(tmp_path, monkeypatch):
+    bot, t = _sbot(tmp_path, monkeypatch, trading=FakeTrading(held=10), direction="short")
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    assert not t.sent                                            # you hold shares: no short
+    t2 = FakeTrading(cash=1000)
+    bot2, t2 = _sbot(tmp_path, monkeypatch, trading=t2, direction="short")
+    monkeypatch.setattr(t2, "get_account", lambda: SimpleNamespace(
+        equity="1000", cash="1000", non_marginable_buying_power="1000", buying_power="4000", multiplier="4",
+        account_number="PA1", shorting_enabled=True, trading_blocked=False, account_blocked=False,
+        trade_suspended_by_user=False))
+    bot2.enter(50.0, 51.0, "short bounce", side=-1)
+    assert int(t2.sent[0].qty) == 5                              # 25% of $1,000 (max position): 5 shares
+
+
+def test_short_entry_skipped_when_price_already_at_the_stop(tmp_path, monkeypatch):
+    bot, t = _sbot(tmp_path, monkeypatch, direction="short")
+    t.price = 51.0
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    assert not t.sent and bot.pos is None
+
+
+@pytest.mark.parametrize("direction", ["short", "both"])
+def test_full_live_session_with_shorts_against_fake_alpaca(tmp_path, monkeypatch, direction):
+    """Whole days with shorts allowed: stops above the price fire when a bar trades up through them,
+    the bot is never open without a stop, and it ends every day flat."""
+    monkeypatch.setattr(alpaca_live._time, "sleep", lambda s: None)
+    monkeypatch.setattr(live._time, "sleep", lambda s: None)
+    shorts = 0
+    for days in (6, 8, 10):
+        df = synthetic("AAA", days=days)
+        day = sorted(set(df.index.date))[-1]
+        clock = {"t": datetime(day.year, day.month, day.day, 9, 36, tzinfo=ZoneInfo("America/New_York"))}
+        monkeypatch.setattr(live, "now_et", lambda: clock["t"])
+        monkeypatch.setattr(alpaca_live, "now_et", lambda: clock["t"])
+        t = FakeTrading(cash=25_000)
+        bot = AlpacaBot(AlpacaClients(t, FakeData(df), "iex", True),
+                        Config(broker="alpaca", watchlist=["AAPL"], direction=direction, max_trades_per_day=4),
+                        live=True, workdir=tmp_path)
+        monkeypatch.setattr(bot, "_last_trade_price", lambda: t.price)
+        bot.snapshot_settled_cash()
+        bot.symbol = "AAPL"
+        bot.history = df[df.index.date < day]
+        now = clock["t"]
+        while now.time() < live._t(bot.cfg.flatten_time):
+            clock["t"] = now
+            seen = df[df.index + pd.Timedelta(minutes=5) <= pd.Timestamp(now)]
+            if len(seen):
+                bar = seen.iloc[-1]
+                t.price = float(bar.close)
+                for o in t.open_stops():
+                    hit = bar.high >= float(o.stop_price) if o.side == "buy" else bar.low <= float(o.stop_price)
+                    if hit:
+                        t.trigger_stop(at=float(o.stop_price))
+            bot.step()
+            now += pd.Timedelta(minutes=5)
+        clock["t"] = now
+        bot.flatten("end of day")
+        assert t.pos["AAPL"] == 0 and bot.pos is None, days
+        assert all(n >= 1 for n in t.stops_seen), days
+        for c in bot.closed:
+            assert c["pnl"] == pytest.approx((c["exit"] - c["entry"]) * c["shares"] * c["side"])
+            if c["side"] < 0 and c["reason"] in ("stop", "trail"):
+                assert any(o.side == "buy" and o.order_type == "stop" and o.status == "filled"
+                           and float(o.filled_avg_price) == c["exit"] for o in t.all.values())
+        shorts += sum(1 for c in bot.closed if c["side"] < 0)
+        if direction == "short":
+            assert all(c["side"] < 0 for c in bot.closed)
+    assert shorts >= 1

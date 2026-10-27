@@ -80,16 +80,13 @@ def test_watches_the_top_ranked_and_trades_whichever_signals(tmp_path, monkeypat
 def test_best_ranked_signal_wins_a_tie(tmp_path, monkeypatch):
     bot, c, clock, dfs = _setup(tmp_path, monkeypatch)
     bot.prepare()
-    real = strategy.signal_at
-
-    def everyone_signals(d, t, cfg, lo, hi):
+    def everyone_signals(d, md, t, cfg, lo, hi):
         c_ = float(d["close"].iat[t])
         return strategy.Signal("bounce", t, None, c_ - 1, c_ * 0.99, c_)
-    monkeypatch.setattr(live, "signal_at", everyone_signals)
+    monkeypatch.setattr(live, "signals_at", everyone_signals)
     clock["t"] = clock["t"].replace(hour=10, minute=1)
     bot.step()
     assert bot.pos and bot.symbol == bot.watch[0]
-    monkeypatch.setattr(live, "signal_at", real)
 
 
 def test_while_in_a_trade_only_that_symbol_is_fetched(tmp_path, monkeypatch):

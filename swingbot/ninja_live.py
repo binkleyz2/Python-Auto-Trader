@@ -379,8 +379,8 @@ class NinjaBot(Bot):
                  self.cfg.futures_max_contracts)
 
     # ------------------------------------------------------------ sizing & prices
-    def size_position(self, equity: float, entry: float, stop: float) -> int:
-        risk_per_contract = (entry - stop) * self.point_value
+    def size_position(self, equity: float, entry: float, stop: float, side: int = 1) -> int:
+        risk_per_contract = (entry - stop) * side * self.point_value
         if risk_per_contract <= 0:
             return 0
         n = int(equity * self.cfg.risk_per_trade_pct / 100 // risk_per_contract)
@@ -389,8 +389,11 @@ class NinjaBot(Bot):
                      risk_per_contract, self.cfg.risk_per_trade_pct, equity)
         return max(0, min(n, self.cfg.futures_max_contracts))
 
-    def _cap_shares(self, shares: int, entry_ref: float) -> int:
+    def _cap_shares(self, shares: int, entry_ref: float, side: int = 1) -> int:
         return min(shares, self.cfg.futures_max_contracts)
+
+    def short_check(self, symbol: str, qty: int) -> str | None:
+        return None                                     # futures: selling first is an ordinary order
 
     def _round_price(self, x: float, rounding) -> Decimal:
         ticks = (Decimal(str(x)) / self.tick).quantize(Decimal("1"), rounding=rounding)
@@ -450,7 +453,7 @@ class NinjaBot(Bot):
         cid, aid = self.contract["id"], self._acct()["id"]
         for p in self.client.get("/position/list") or []:
             if p.get("contractId") == cid and p.get("accountId") == aid:
-                return max(0, int(p.get("netPos") or 0))      # long-only bot: shorts never count as ours
+                return int(p.get("netPos") or 0)               # negative = short
         return 0
 
     # ------------------------------------------------------------ orders
@@ -496,24 +499,25 @@ class NinjaBot(Bot):
         qty = sum(int(f["qty"]) for f in fills)
         return sum(float(f["price"]) * int(f["qty"]) for f in fills) / qty if qty else None
 
-    def _submit_entry(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None, entry_ref: float):
-        body = self._order_body(action="Buy", orderQty=int(shares), orderType="Market",
-                                bracket1={"action": "Sell", "orderType": "Stop", "stopPrice": float(stop_d),
+    def _submit_entry(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None, entry_ref: float, side: int = 1):
+        act, ex = ("Buy", "Sell") if side > 0 else ("Sell", "Buy")
+        body = self._order_body(action=act, orderQty=int(shares), orderType="Market",
+                                bracket1={"action": ex, "orderType": "Stop", "stopPrice": float(stop_d),
                                           "timeInForce": "Day"})
         if tgt_d is not None:
-            body["bracket2"] = {"action": "Sell", "orderType": "Limit", "price": float(tgt_d), "timeInForce": "Day"}
+            body["bracket2"] = {"action": ex, "orderType": "Limit", "price": float(tgt_d), "timeInForce": "Day"}
         res = self._check(self.client.post("/order/placeoso", body), "Entry order")
         oid = str(res["orderId"])
         self.my_order_ids.add(oid)
-        self._meta[oid] = {"type": "MARKET", "side": "BUY", "qty": shares}
+        self._meta[oid] = {"type": "MARKET", "side": act.upper(), "qty": shares}
         if res.get("oso1Id"):
             sid = str(res["oso1Id"])
             self.my_order_ids.add(sid)
-            self._meta[sid] = {"type": "STOP", "side": "SELL", "qty": shares, "parent": oid}
+            self._meta[sid] = {"type": "STOP", "side": ex.upper(), "qty": shares, "parent": oid}
         if res.get("oso2Id"):
             tid = str(res["oso2Id"])
             self.my_order_ids.add(tid)
-            self._meta[tid] = {"type": "LIMIT", "side": "SELL", "qty": shares, "parent": oid}
+            self._meta[tid] = {"type": "LIMIT", "side": ex.upper(), "qty": shares, "parent": oid}
         log.info("OSO entry submitted: %s (stop leg %s at %s)", oid, res.get("oso1Id"), stop_d)
         o = self._wait_fill(oid)
         if str(o.get("ordStatus")) == "Filled":
@@ -528,10 +532,11 @@ class NinjaBot(Bot):
         return oid, None
 
     def _place_stop(self, qty: int, stop_d: Decimal) -> str:
+        ex = self._exit_side()
         res = self._check(self.client.post("/order/placeorder", self._order_body(
-            action="Sell", orderQty=int(qty), orderType="Stop", stopPrice=float(stop_d))), "Stop order")
+            action=ex.title(), orderQty=int(qty), orderType="Stop", stopPrice=float(stop_d))), "Stop order")
         oid = str(res["orderId"])
-        self._meta[oid] = {"type": "STOP", "side": "SELL", "qty": qty}
+        self._meta[oid] = {"type": "STOP", "side": ex, "qty": qty}
         return oid
 
     def _replace_stop(self, so, new_d: Decimal) -> str:
@@ -545,20 +550,21 @@ class NinjaBot(Bot):
                     "Cancel")
 
     def _market_sell(self, qty: int):
+        ex = self._exit_side()
         res = self._check(self.client.post("/order/placeorder", self._order_body(
-            action="Sell", orderQty=int(qty), orderType="Market")), "Sell order")
+            action=ex.title(), orderQty=int(qty), orderType="Market")), "Exit order")
         oid = str(res["orderId"])
-        self._meta[oid] = {"type": "MARKET", "side": "SELL", "qty": qty}
+        self._meta[oid] = {"type": "MARKET", "side": ex, "qty": qty}
         o = self._wait_fill(oid)
         if str(o.get("ordStatus")) == "Filled":
             return oid, self._avg_fill(oid)
-        log.error("sell not confirmed (status %s) - CHECK THE ACCOUNT", o.get("ordStatus"))
+        log.error("%s not confirmed (status %s) - CHECK THE ACCOUNT", self._exit_verb(), o.get("ordStatus"))
         return oid, None
 
     def _filled_sell_price(self, order_ids) -> float | None:
-        price = None
+        price, want = None, self._exit_side()
         for oid in order_ids:
-            if self._meta.get(str(oid), {}).get("side") != "SELL":
+            if self._meta.get(str(oid), {}).get("side") != want:
                 continue
             try:
                 o = self.client.get("/order/item", id=int(oid))

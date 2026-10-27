@@ -58,7 +58,7 @@ class FakeNinjaHTTP:
 
     def trigger_stop(self, at):
         for o in self.open_stops():
-            self._fill(o["id"], o["qty"], at, "Sell")
+            self._fill(o["id"], o["qty"], at, o["action"])
             for sib in self.orders.values():              # OCO sibling (target leg) goes away
                 if sib.get("parent") == o.get("parent") and sib is not o and sib["ordStatus"] == "Working":
                     sib["ordStatus"] = "Canceled"
@@ -77,14 +77,15 @@ class FakeNinjaHTTP:
         if path == "/cashBalance/getcashbalancesnapshot":
             return Resp({"netLiq": 25000.0, "totalCashValue": 25000.0, "initialMargin": 0.0})
         if path == "/order/placeoso":
-            assert json["isAutomated"] is True and json["orderType"] == "Market" and json["action"] == "Buy"
+            assert json["isAutomated"] is True and json["orderType"] == "Market"
+            assert json["bracket1"]["action"] != json["action"]
             oid, sid = self._id(), self._id()
-            self.orders[oid] = {"id": oid, "action": "Buy", "type": "Market", "qty": json["orderQty"],
+            self.orders[oid] = {"id": oid, "action": json["action"], "type": "Market", "qty": json["orderQty"],
                                 "ordStatus": "Working"}
-            self.orders[sid] = {"id": sid, "action": "Sell", "type": json["bracket1"]["orderType"],
+            self.orders[sid] = {"id": sid, "action": json["bracket1"]["action"], "type": json["bracket1"]["orderType"],
                                 "qty": json["orderQty"], "stopPrice": json["bracket1"]["stopPrice"],
                                 "ordStatus": "Working", "parent": oid}
-            self._fill(oid, json["orderQty"], self.price, "Buy")
+            self._fill(oid, json["orderQty"], self.price, json["action"])
             self._note()
             return Resp({"orderId": oid, "oso1Id": sid, "failureReason": "Success"})
         if path == "/order/placeorder":
@@ -366,3 +367,27 @@ def test_ninja_requests_one_minute_chart(tmp_path, monkeypatch):
     url, ws = bot.client.sockets[-1]
     req = ws.chart_requests[-1]
     assert req["chartDescription"]["elementSize"] == 1 and req["timeRange"]["asMuchAsElements"] == 1600
+
+
+
+def test_short_futures_entry_trail_and_exit(tmp_path, monkeypatch):
+    bot, http = _bot(tmp_path, monkeypatch, direction="short")
+    bot.enter(2500.0, 2510.03, "short bounce", side=-1)
+    oso = [b for m, p, b in http.calls if p == "/order/placeoso"][0]
+    assert oso["action"] == "Sell" and oso["bracket1"] == {"action": "Buy", "orderType": "Stop",
+                                                            "stopPrice": 2510.1, "timeInForce": "Day"}
+    assert http.pos == -1 and bot.bot_shares() == 1
+    bot.raise_stop(2497.0)
+    assert http.open_stops()[0]["stopPrice"] == 2497.0
+    http.trigger_stop(at=2497.0)
+    bot._check_live_exit()
+    c = bot.closed[-1]
+    assert bot.pos is None and c["reason"] == "trail" and c["pnl"] == pytest.approx(30.0)   # 3 points x $10
+
+
+def test_short_futures_flatten_buys_back(tmp_path, monkeypatch):
+    bot, http = _bot(tmp_path, monkeypatch, direction="short")
+    bot.enter(2500.0, 2510.0, "short bounce", side=-1)
+    bot.flatten("end of day")
+    buys = [b for m, p, b in http.calls if p == "/order/placeorder" and b["orderType"] == "Market"]
+    assert len(buys) == 1 and buys[0]["action"] == "Buy" and http.pos == 0 and bot.pos is None

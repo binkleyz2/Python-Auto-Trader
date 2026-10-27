@@ -99,3 +99,13 @@ def test_reads_the_api_keys_from_env(folder, monkeypatch):
     assert seen == {"key": "k1", "secret": "s1"}
     for k in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY"):
         os.environ.pop(k, None)
+
+
+def test_short_trade_corrected(folder):
+    st_path = folder / "logs" / f"{DAY}-state.json"
+    st = json.loads(st_path.read_text(encoding="utf-8"))
+    st["closed"][-1].update(kind="short bounce", side=-1, entry=30.46, exit=84.32, pnl=-41741.5, reason="stop")
+    st_path.write_text(json.dumps(st), encoding="utf-8")
+    fix_exit.main([DAY, "BUSE", "30.30"])
+    t = json.loads(st_path.read_text(encoding="utf-8"))["closed"][-1]
+    assert t["exit"] == 30.30 and t["pnl"] == pytest.approx(0.16 * 775)

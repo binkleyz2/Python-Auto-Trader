@@ -139,7 +139,7 @@
       <span><i class="key" style="border-color:var(--support)"></i>Support (rising)</span>
       <span><i class="key" style="border-color:var(--resist)"></i>Resistance (falling)</span>
       <span><i class="key" style="border-color:var(--entry)"></i>Entry</span>
-      <span><i class="key" style="border-color:var(--stop)"></i>Stop (trails up)</span>
+      <span><i class="key" style="border-color:var(--stop)"></i>Stop (trails)</span>
       <span><i class="key dash" style="border-color:var(--muted)"></i>Initial stop</span>
       <span class="spacer"></span>
       <span class="tf" id="chartpick" hidden>Chart <select id="chartsel" aria-label="Symbol shown on the chart"></select></span>
@@ -217,16 +217,17 @@ function renderTop(s) {
 
   const p = s.pos;
   if (p) {
-    setText("t-pos", `${p.shares} ${s.unit || "sh"}`);
+    const side = p.side || 1;
+    setText("t-pos", `${side < 0 ? "Short " : ""}${p.shares} ${s.unit || "sh"}`);
     setText("t-pos-s", `${p.kind} · in at ${fmt(p.entry)} · ${p.entry_time}`);
     const unreal = p.unreal, r = p.r;
     setText("t-open", signed(unreal), tone(unreal));
     setText("t-open-s", r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R  (1R = ${money(p.risk_dollars)})`);
     setText("t-stop", fmt(p.stop));
-    const dist = s.last != null ? s.last - p.stop : null;
-    const locked = (p.stop - p.entry) * p.shares;
-    let sub = dist == null ? "" : `${fmt(dist)} below last`;
-    if (p.stop > p.init_stop) sub += locked >= 0 ? ` · locks ${signed(locked)}` : ` · raised ${p.stop_steps.length - 1}×`;
+    const dist = s.last != null ? (s.last - p.stop) * side : null;
+    const locked = (p.stop - p.entry) * p.shares * side;
+    let sub = dist == null ? "" : `${fmt(dist)} ${side < 0 ? "above" : "below"} last`;
+    if ((p.stop - p.init_stop) * side > 0) sub += locked >= 0 ? ` · locks ${signed(locked)}` : ` · moved ${p.stop_steps.length - 1}×`;
     setText("t-stop-s", sub);
   } else {
     setText("t-pos", "Flat"); setText("t-pos-s", s.symbol ? "watching for a setup" : "");
@@ -330,7 +331,7 @@ function renderChart(s) {
     const x0 = x(p.entry_x) - (pw / TOTAL) / 2, x1 = pad.l + pw;
     const top = Math.max(p.entry, p.stop), bot = Math.min(p.entry, p.stop);
     el("rect", {x: x0, y: y(top), width: Math.max(0, x1 - x0), height: Math.max(1, y(bot) - y(top)),
-                fill: p.stop > p.entry ? cssVar("--gain-wash") : cssVar("--risk-wash")}, svg);
+                fill: (p.stop - p.entry) * (p.side || 1) > 0 ? cssVar("--gain-wash") : cssVar("--risk-wash")}, svg);
   }
 
   // candles (neutral ink: price is context, the levels are the story)
@@ -381,7 +382,7 @@ function renderChart(s) {
     tri(svg, xe, y(p.entry), cssVar("--entry"));
     labels.push([y(p.entry), `Entry ${fmt(p.entry)}`, cssVar("--entry")]);
     labels.push([y(p.stop), `Stop ${fmt(p.stop)}`, cssVar("--stop")]);
-    if (p.stop > p.init_stop) labels.push([y(p.init_stop), `Init ${fmt(p.init_stop)}`, cssVar("--muted")]);
+    if (p.stop !== p.init_stop) labels.push([y(p.init_stop), `Init ${fmt(p.init_stop)}`, cssVar("--muted")]);
   }
   if (lastPx != null) {
     const lb = bars[bars.length - 1];
@@ -521,7 +522,7 @@ function chooseChart(sym) {
 $("chartsel").addEventListener("change", ev => chooseChart(ev.target.value));
 $("tf").addEventListener("change", async ev => {
   const sel = ev.target, want = Number(sel.value), cur = S ? S.bar_minutes : null;
-  if (S && S.pos && !confirm(`Switch the bot to ${want}-minute bars?\n\nThe open position and its stop stay as they are; the stop keeps trailing on ${want}-minute swing lows.`)) {
+  if (S && S.pos && !confirm(`Switch the bot to ${want}-minute bars?\n\nThe open position and its stop stay as they are; the stop keeps trailing on ${want}-minute swing ${(S.pos.side || 1) < 0 ? "highs" : "lows"}.`)) {
     sel.value = String(S.pending_bars || cur); return;
   }
   tfBusy = true; sel.disabled = true; $("tfnote").textContent = "sending…";
@@ -655,8 +656,10 @@ function renderBanner(s) {
   else if (failing) msg = "Can't reach the bot – it may have stopped. Showing the last data received.";
   else if (s.epoch && !s.final && Date.now() / 1000 - s.epoch > 120)
     msg = `No update from the bot for ${Math.round((Date.now() / 1000 - s.epoch) / 60)} min – check that it's still running.`;
-  else if (s.not_flat) msg = `${s.not_flat.symbol}: ${s.not_flat.shares} shares could NOT be sold before the close and are still open with no stop. Close the position in your broker's app.`;
-  else if (s.leftover) msg = `${s.leftover.symbol}: ${s.leftover.shares} shares from ${s.leftover.date} are still open (the bot didn't sell them that day). The bot won't touch them - close them in your broker's app.`;
+  else if (s.not_flat) msg = `${s.not_flat.symbol}: ${s.not_flat.shares} shares could NOT be ${(s.not_flat.side || 1) < 0 ? "bought back" : "sold"} before the close and are still open with no stop. Close the position in your broker's app.`;
+  else if (s.leftover) msg = (s.leftover.side || 1) < 0
+    ? `${s.leftover.symbol}: a short of ${s.leftover.shares} shares from ${s.leftover.date} is still open (the bot didn't buy them back that day). The bot won't touch it - close it in your broker's app.`
+    : `${s.leftover.symbol}: ${s.leftover.shares} shares from ${s.leftover.date} are still open (the bot didn't sell them that day). The bot won't touch them - close them in your broker's app.`;
   else if (s.final) { msg = "Session finished."; info = true; }
   else if (s.stale) {
     msg = `No new ${s.stale.symbol} bar since ${s.stale.since} ET (${s.stale.minutes} min): ${s.stale.feed} has had no trades in it, ` +

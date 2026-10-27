@@ -1,6 +1,6 @@
 # Swingbot
 
-A day-trading bot for Public.com or Alpaca (stocks) or NinjaTrader (futures) that you run on your own computer. Each morning it scans your watchlist, picks one stock, and trades it long-only on 5-minute bars. It uses swing-point trend lines and is always out of the market by the close.
+A day-trading bot for Public.com or Alpaca (stocks) or NinjaTrader (futures) that you run on your own computer. Each morning it scans your watchlist, picks one stock, and trades it on 5-minute bars: long by default, or also short (`direction`). It uses swing-point trend lines and is always out of the market by the close.
 
 **You are responsible for every order it sends.** It starts in dry-run mode, which places no orders. Run the backtest and at least a few weeks of dry runs before you use `--live`.
 
@@ -25,6 +25,29 @@ Version history: see [CHANGELOG.md](CHANGELOG.md) and the repository's Releases 
 | Morning pick | Ranks the watchlist by how close each stock sits to a valid line, using data up to yesterday's close only. Stocks under $10, under $50M average daily volume, or (for bounces) below their 5-day average are skipped. |
 
 All of these numbers can be changed in `config.yaml`.
+
+### Shorts (`direction: short` or `both`)
+
+`direction: long` (the default) trades long only. `short` trades short only; `both` trades either, still one position at a time. Shorts follow exactly the same rules as longs, mirrored: the bot turns the chart upside down, applies the long rules, and turns the result back.
+
+| Long | Short |
+|---|---|
+| Bounce off rising support (green bar) | Bounce off falling resistance (red bar) |
+| Breakout above falling resistance | Breakdown below rising support |
+| Stop below the line, trails under swing lows, only moves up | Stop above the line, trails over swing highs, only moves down |
+| Breakeven and target above the entry | Breakeven and target below the entry |
+| Stocks above their 5-day average preferred | Stocks below their 5-day average preferred |
+| 15:50: sell | 15:50: buy back |
+
+Risk per trade, the daily loss limit, the trade limit and the largest-position limit are the same for both sides. What's different:
+
+- **A margin account is needed**, with at least $2,000 in it (Alpaca and Public). In a cash account every short is refused. Longs still follow the cash and settled-cash rules; a short uses no cash, and its size is limited by the broker's short buying power and never more than the account value (no leverage).
+- **Only easy-to-borrow stocks.** Before each short the bot asks the broker whether the stock can be shorted; hard-to-borrow stocks (borrow fees) and stocks it can't short are skipped and logged. On Public it also skips a stock while the short-sale restriction is on (down 10% from the day before), because market orders are refused then. A dry run asks the same questions, so it skips the same trades.
+- **The account must be flat in that stock**: no short while you hold shares of it yourself.
+- **Alpaca:** the short is a bracket order like a long (sell, with a buy stop above and a parked or real target below). **Public:** a market short sale, then a separate buy stop; a profit target isn't placed on a Public short. **NinjaTrader:** a sell with the stop attached, like a long in reverse.
+- Shorts can lose more than the stop if a stock gaps up through it. The stop is a stop order, not a guarantee.
+
+Try shorts in a dry run and on Alpaca's paper account first.
 
 ## Setup
 
@@ -85,8 +108,8 @@ The **Settings** card shows the rules in force: risk and limits, stops, profit a
 
 | Setting | What it does | config.yaml |
 | --- | --- | --- |
-| Trail distance under swing lows | How far under each new swing low the trailing stop goes, in ATR. Larger = looser, rides pullbacks. Affects future raises only; the stop never moves down. | `trail_buffer_atr` (blank = `stop_buffer_atr`) |
-| Move stop to entry once up | The breakeven trigger in R; 0 = off | `breakeven_at_r` |
+| Trail distance from swing points | How far beyond each new swing point the trailing stop goes (under swing lows for a long, over swing highs for a short), in ATR. Larger = looser, rides pullbacks. Affects future moves only; the stop never moves back. | `trail_buffer_atr` (blank = `stop_buffer_atr`) |
+| Move stop to entry once ahead | The breakeven trigger in R; 0 = off | `breakeven_at_r` |
 | Profit target | Take profit at entry + this many R; 0 = off. On Alpaca it is also placed on the open trade (refused if the price is already there). On Public and NinjaTrader it applies from the next trade. | `use_target` / `reward_risk` |
 
 Changes are logged, kept if the bot restarts that day, and marked "today only" on the card next to the `config.yaml` value. The next day starts from `config.yaml` again; edit the file to make a change permanent.

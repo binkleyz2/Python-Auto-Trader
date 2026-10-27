@@ -43,6 +43,7 @@ class Config:
     breakout_volume_mult: float = 1.2     # breakout bar volume vs 20-bar average (0 disables)
 
     # --- Trade management ------------------------------------------------------
+    direction: str = "long"               # "long", "short" or "both" (shorts: margin account, borrowable stocks)
     enable_bounce: bool = True
     enable_breakout: bool = True
     trail_stop: bool = True               # raise the stop below each new confirmed swing low
@@ -93,6 +94,8 @@ class Config:
             raise ValueError(f"min_stop_pct must be 0 to 20, not {self.min_stop_pct!r}")
         if not 1 <= int(self.scan_workers) <= 32:
             raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
+        if self.direction not in ("long", "short", "both"):
+            raise ValueError(f"direction must be 'long', 'short' or 'both', not {self.direction!r}")
         if self.bar_minutes not in (1, 2, 3, 5, 10, 15, 30):
             raise ValueError(f"bar_minutes must be 1, 2, 3, 5, 10, 15 or 30, not {self.bar_minutes!r}")
         if self.broker == "public" or self.price_data == "public":

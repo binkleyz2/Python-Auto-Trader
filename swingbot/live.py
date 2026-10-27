@@ -34,8 +34,8 @@ from .backtest import position_size
 from .config import Config
 from .data import fetch_public, normalize
 from .scanner import avg_dollar_volume, scan
-from .strategy import (add_indicators, breakeven_stop, find_swings, resistance_line, signal_at, support_line, target_for,
-                       trailing_stop)
+from .strategy import (add_indicators, better_stop, find_swings, mirror, resistance_line, sided_breakeven_stop,
+                       sided_trailing_stop, signals_at, support_line, target_for)
 
 ET = ZoneInfo("America/New_York")
 log = logging.getLogger("swingbot")
@@ -240,8 +240,8 @@ class Bot:
 
     # ------------------------------------------------- settings: shown on the page, some adjustable today
     ADJUSTABLE = {
-        "trail_buffer_atr": dict(label="Trail distance under swing lows", unit="ATR", min=0.05, max=3.0, step=0.05),
-        "breakeven_at_r": dict(label="Move stop to entry once up", unit="R (0 = off)", min=0.0, max=5.0, step=0.25),
+        "trail_buffer_atr": dict(label="Trail distance from swing points", unit="ATR", min=0.05, max=3.0, step=0.05),
+        "breakeven_at_r": dict(label="Move stop to entry once ahead", unit="R (0 = off)", min=0.0, max=5.0, step=0.25),
         "target_r": dict(label="Profit target", unit="R (0 = off)", min=0.0, max=10.0, step=0.25),
     }
 
@@ -297,26 +297,28 @@ class Bot:
                      spec["unit"].split(" (")[0], self.setting_value(key, self.cfg0))
             if key == "target_r" and self.pos:
                 self._retarget(v)
-            if key == "breakeven_at_r" and self.pos and self.pos["stop"] >= self.pos["entry"]:
-                log.info("(the open trade's stop is already at or above the entry; it never moves down)")
+            if key == "breakeven_at_r" and self.pos and \
+                    (self.pos["stop"] - self.pos["entry"]) * self.pos.get("side", 1) >= 0:
+                log.info("(the open trade's stop is already at or past the entry; it never moves back)")
         self.save_state()
 
     def _retarget(self, r: float) -> None:
         """Put a profit target on the open trade at entry + r x its risk (r = 0 removes it)."""
         p = self.pos
-        risk = p["entry"] - p["init_stop"]
-        new = p["entry"] + r * risk if r > 0 and risk > 0 else None
+        side = p.get("side", 1)
+        risk = abs(p["entry"] - p["init_stop"])
+        new = p["entry"] + side * r * risk if r > 0 and risk > 0 else None
         if new is not None:
             try:
                 px = self._last_trade_price()
             except Exception:
                 px = None
             px = px if px is not None else self.last_price
-            if px is not None and new <= px + float(self._tick()):
-                log.warning("Target %.2f is at or below the price %.2f - not set for the open trade (it would "
-                            "sell at once); it applies to the next trade", new, px)
+            if px is not None and side * (new - px) <= float(self._tick()):
+                log.warning("Target %.2f is at or %s the price %.2f - not set for the open trade (it would "
+                            "fill at once); it applies to the next trade", new, "below" if side > 0 else "above", px)
                 return
-            new = float(self._round_price(new, ROUND_UP))
+            new = float(self._round_price(new, ROUND_UP if side > 0 else ROUND_DOWN))
         if self.live:
             try:
                 self._set_target(new)
@@ -341,6 +343,9 @@ class Bot:
                         min=spec["min"], max=spec["max"], step=spec["step"], default=self.setting_value(key, c0),
                         changed=key in self.overrides and self.setting_value(key) != self.setting_value(key, c0))
         cash = ("settled cash only" if c.settled_cash_only else "cash") + (", margin allowed" if c.use_margin else ", no margin")
+        if c.direction != "long":
+            cash += "; shorts on margin, up to the account value"
+        direction = {"long": "long only", "short": "short only", "both": "long and short (one trade at a time)"}[c.direction]
         profit = [adj("target_r")]
         if self.pos:
             t = self.pos.get("target")
@@ -352,13 +357,14 @@ class Bot:
                 dict(label="Risk per trade", text=f"{c.risk_per_trade_pct:g}% of the account"),
                 dict(label="Daily loss limit", text=f"{c.daily_loss_limit_pct:g}% (no new entries after)"),
                 dict(label="Trades per day", text=f"{c.max_trades_per_day}"),
+                dict(label="Direction", text=direction),
                 dict(label="Largest position", text=f"{c.max_position_pct:g}% of the account"),
                 dict(label="Cash", text=cash)]),
             dict(group="Stops", items=[
-                dict(label="Initial stop", text=f"{c.stop_buffer_atr:g} ATR under the line; at least {c.min_stop_atr:g} ATR "
-                                                f"and {c.min_stop_pct:g}% under entry; skip if over {c.max_stop_atr:g} ATR"),
+                dict(label="Initial stop", text=f"{c.stop_buffer_atr:g} ATR beyond the line; at least {c.min_stop_atr:g} ATR "
+                                                f"and {c.min_stop_pct:g}% from entry; skip if over {c.max_stop_atr:g} ATR"),
                 adj("trail_buffer_atr"),
-                dict(label="Trail step", text=f"raised only by {c.trail_min_step_atr:g} ATR or more"),
+                dict(label="Trail step", text=f"moved only by {c.trail_min_step_atr:g} ATR or more"),
                 adj("breakeven_at_r")]),
             dict(group="Profit", items=profit),
             dict(group="Timing", items=[
@@ -418,6 +424,9 @@ class Bot:
         self.last_bar_seen = None
         self._resync = True                            # next check redraws; entries resume from the next bar
         return self.watch != old
+
+    def _is_short(self) -> bool:
+        return bool(self.pos) and self.pos.get("side", 1) < 0
 
     def _x(self, ts) -> float:
         return x_of(ts, self.bm)
@@ -582,9 +591,11 @@ class Bot:
                 held = 0
             finally:
                 self.symbol = saved
+            held *= int(p.get("side", 1))                  # a short shows as negative shares
             if held > 0:
-                self.leftover = dict(symbol=sym, shares=min(held, int(p["shares"])), date=st.get("date"))
-                log.error("%s: %d shares from %s are STILL OPEN - the bot did not sell them that day. It "
+                self.leftover = dict(symbol=sym, shares=min(held, int(p["shares"])), date=st.get("date"),
+                                     side=int(p.get("side", 1)))
+                log.error("%s: %d shares from %s are STILL OPEN - the bot did not close them that day. It "
                           "won't trade them; close the position in your broker's app.", sym, self.leftover["shares"],
                           st.get("date"))
             return                                          # only the most recent earlier day matters
@@ -668,9 +679,9 @@ class Bot:
         """Settings the morning scan uses (futures swap in their contract list and skip stock filters)."""
         return self.cfg
 
-    def size_position(self, equity: float, entry: float, stop: float) -> int:
-        """Units to buy from the risk rules (shares for stocks; contracts for futures)."""
-        return position_size(equity, entry, stop, self.cfg)
+    def size_position(self, equity: float, entry: float, stop: float, side: int = 1) -> int:
+        """Units to trade from the risk rules (shares for stocks; contracts for futures)."""
+        return position_size(equity, entry, stop, self.cfg, side)
 
     def _tick(self) -> Decimal:
         """Smallest price step (stocks: one cent)."""
@@ -680,8 +691,16 @@ class Bot:
         """Round an order price to what the market accepts (cents for stocks, tick size for futures)."""
         return _price(x, rounding)
 
-    def _cap_shares(self, shares: int, entry_ref: float) -> int:
-        """Live: trim the size to what the account may spend (cash-only and settled-cash rules)."""
+    def _cap_shares(self, shares: int, entry_ref: float, side: int = 1) -> int:
+        """Live: trim the size to what the account may spend (cash-only and settled-cash rules).
+        Shorts use no cash: they are limited by the broker's short buying power, and never more than
+        the account value (no leverage)."""
+        if side < 0:
+            bp = self.short_buying_power()
+            capped = cap_by_buying_power(shares, bp, entry_ref, self.cfg.buying_power_buffer_pct)
+            if capped < shares:
+                log.info("Size cut from %d to %d shares to fit short buying power $%.2f", shares, capped, bp)
+            return capped
         bp = self.available_buying_power()
         capped = cap_by_buying_power(shares, bp, entry_ref, self.cfg.buying_power_buffer_pct)
         if capped < shares:
@@ -701,6 +720,27 @@ class Bot:
 
     def liquidity(self, symbols: list[str]) -> dict | None:
         """Average daily dollar volume per symbol, if the bar feed can't be trusted for it."""
+        return None
+
+    def short_buying_power(self) -> float:
+        """Margin available for a short, capped at the account value (no leverage). 0 = can't short."""
+        pf = self.client.get_portfolio()
+        bp = getattr(getattr(pf, "buying_power", None), "buying_power", None)
+        return max(0.0, min(float(bp or 0), self.account_equity()))
+
+    def short_check(self, symbol: str, qty: int) -> str | None:
+        """Why ``symbol`` can't be shorted now (None = it can). Easy-to-borrow only; and not while the
+        short-sale restriction (uptick rule) is on, because market orders are refused then."""
+        from public_api_sdk import InstrumentType
+        inst = self.client.get_instrument(symbol, InstrumentType.EQUITY)
+        avail = _val(getattr(inst, "shorting_availability", None) or "NOT_SHORTABLE")
+        if avail != "EASY_TO_BORROW":
+            return "hard to borrow" if avail == "HARD_TO_BORROW" else "not shortable at Public"
+        if qty > 0:
+            pre = self.client.preflight_short_order(symbol, Decimal(qty))
+            ss = getattr(pre, "short_selling", None)
+            if ss is not None and _val(getattr(ss, "uptick_rule", "")) == "TRIGGERED":
+                return "short-sale restriction (down 10% from yesterday) is on"
         return None
 
     def _instrument(self):
@@ -742,10 +782,13 @@ class Bot:
                                qty=o.quantity, created_at=o.created_at, raw=o))
         return out
 
-    def _submit_entry(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None, entry_ref: float):
-        """Market buy with the stop attached. Returns (order_id, fill_price or None)."""
+    def _submit_entry(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None, entry_ref: float, side: int = 1):
+        """Market buy with the stop attached. Returns (order_id, fill_price or None).
+        Short: market sell to open, then a buy stop to close (Public has no short brackets; no target)."""
         from public_api_sdk import (EquityMarketSession, OrderClass, OrderExpirationRequest, OrderRequest,
                                     OrderSide, OrderType, StopLoss, TakeProfit, TimeInForce)
+        if side < 0:
+            return self._submit_short(shares, stop_d, tgt_d)
         req = OrderRequest(
             order_id=str(uuid.uuid4()),
             instrument=self._instrument(),
@@ -774,13 +817,43 @@ class Bot:
                 log.error("cancel failed: %s", ce)
             return order.order_id, None
 
+    def _submit_short(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None):
+        from public_api_sdk import EquityMarketSession
+        if tgt_d is not None:
+            log.info("Public: no profit target on a short (it would be a second, unlinked order) - the stop "
+                     "and the 15:50 exit manage it")
+        order = self.client.place_short_order(self.symbol, Decimal(shares),
+                                              equity_market_session=EquityMarketSession.CORE)
+        self.my_order_ids.add(order.order_id)
+        log.info("short sale submitted: %s", order.order_id)
+        try:
+            filled = order.wait_for_fill(timeout=60)
+            price = float(filled.average_price)
+            log.info("filled %s @ %s", filled.filled_quantity, filled.average_price)
+        except Exception as e:
+            log.warning("short sale not fully confirmed within 60s (%s); cancelling any remainder", e)
+            try:
+                order.cancel()
+            except Exception as ce:
+                log.error("cancel failed: %s", ce)
+            price = None
+        qty = max(0, -self.held_quantity())
+        if qty:                                   # protect it at once (no bracket to do it for us)
+            self.my_order_ids.add(self._place_stop(qty, stop_d))
+            log.info("buy stop placed at %s for %d shares", stop_d, qty)
+        return order.order_id, price
+
+    def _exit_side(self) -> str:
+        """The side that closes the open position: SELL for a long, BUY (to cover) for a short."""
+        return "BUY" if self.pos and self.pos.get("side", 1) < 0 else "SELL"
+
     def _place_stop(self, qty: int, stop_d: Decimal) -> str:
         from public_api_sdk import (EquityMarketSession, OpenCloseIndicator, OrderExpirationRequest,
                                     OrderRequest, OrderSide, OrderType, TimeInForce)
         order = self.client.place_order(OrderRequest(
             order_id=str(uuid.uuid4()),
             instrument=self._instrument(),
-            order_side=OrderSide.SELL,
+            order_side=OrderSide.BUY if self._exit_side() == "BUY" else OrderSide.SELL,
             order_type=OrderType.STOP,
             stop_price=stop_d,
             expiration=OrderExpirationRequest(time_in_force=TimeInForce.DAY),
@@ -810,13 +883,13 @@ class Bot:
         self.client.cancel_order(order_id=order_id)
 
     def _market_sell(self, qty: int):
-        """Sell the bot's shares at market. Returns (order_id, fill_price or None)."""
+        """Close the bot's position at market (sell a long, buy back a short). Returns (order_id, fill or None)."""
         from public_api_sdk import (EquityMarketSession, OpenCloseIndicator, OrderExpirationRequest,
                                     OrderRequest, OrderSide, OrderType, TimeInForce)
         order = self.client.place_order(OrderRequest(
             order_id=str(uuid.uuid4()),
             instrument=self._instrument(),
-            order_side=OrderSide.SELL,
+            order_side=OrderSide.BUY if self._exit_side() == "BUY" else OrderSide.SELL,
             order_type=OrderType.MARKET,
             expiration=OrderExpirationRequest(time_in_force=TimeInForce.DAY),
             quantity=Decimal(qty),
@@ -826,18 +899,18 @@ class Bot:
         try:
             return order.order_id, float(order.wait_for_fill(timeout=60).average_price)
         except Exception as e:
-            log.error("sell not confirmed: %s - CHECK THE ACCOUNT", e)
+            log.error("%s not confirmed: %s - CHECK THE ACCOUNT", "cover" if self._exit_side() == "BUY" else "sell", e)
             return order.order_id, None
 
     def _filled_sell_price(self, order_ids) -> float | None:
-        """Average price of a filled SELL among the bot's orders (to record a stop-out)."""
-        price = None
+        """Average price of a filled exit (SELL for a long, BUY for a short) among the bot's orders."""
+        price, want = None, self._exit_side()
         for oid in order_ids:
             try:
                 o = self.client.get_order(order_id=oid)
             except Exception:
                 continue
-            if (_val(getattr(o, "side", "")).upper() == "SELL" and _val(getattr(o, "status", "")).upper() == "FILLED"
+            if (_val(getattr(o, "side", "")).upper() == want and _val(getattr(o, "status", "")).upper() == "FILLED"
                     and getattr(o, "average_price", None) is not None):
                 price = float(o.average_price)
         return price
@@ -876,10 +949,12 @@ class Bot:
         return max(0.0, min(limits))
 
     def bot_shares(self) -> int:
-        """Shares the BOT bought and still holds. Never counts shares you already owned."""
+        """Shares the BOT bought (or sold short) and still has open. Never counts shares you already owned.
+        held_quantity is negative for a short position."""
         if not self.pos:
             return 0
-        return max(0, min(self.pos["shares"], self.held_quantity() - self.pos.get("base_qty", 0)))
+        moved = self.held_quantity() - self.pos.get("base_qty", 0)
+        return max(0, min(self.pos["shares"], moved * self.pos.get("side", 1)))
 
     def _my_open_orders(self) -> list:
         """Open orders the bot itself created (its entries and their stop/target legs) - never yours."""
@@ -887,47 +962,60 @@ class Bot:
                 if o.open and (o.id in self.my_order_ids or (o.parent and o.parent in self.my_order_ids))]
 
     def _my_stop_order(self):
+        exit_side = self._exit_side()
         for o in self._my_open_orders():
-            if o.side == "SELL" and o.type in ("STOP", "STOP_LIMIT"):
+            if o.side == exit_side and o.type in ("STOP", "STOP_LIMIT"):
                 return o
         # Fallback in case the broker doesn't tag bracket legs with the entry id: a sell stop on this
         # symbol for exactly the bot's share count, created after the bot's entry.
         if self.pos and self.pos.get("entry_time"):
             for o in self._orders():
-                if (o.open and o.side == "SELL" and o.type in ("STOP", "STOP_LIMIT")
+                if (o.open and o.side == exit_side and o.type in ("STOP", "STOP_LIMIT")
                         and o.qty is not None and int(Decimal(str(o.qty))) == self.pos["shares"]
                         and o.created_at is not None and o.created_at >= self.pos["entry_time"]):
                     self.my_order_ids.add(o.id)
                     return o
         return None
 
-    def enter(self, entry_ref: float, stop: float, kind: str, signal_ts=None) -> None:
+    def enter(self, entry_ref: float, stop: float, kind: str, signal_ts=None, side: int = 1) -> None:
         cfg = self.cfg
+        if side < 0:
+            why = self._why_no_short(0)
+            if why:
+                log.info("Signal %s on %s skipped: %s", kind, self.symbol, why)
+                return
         equity = self.account_equity() if self.live else cfg.starting_equity + self.paper_pnl
-        shares = self.size_position(equity, entry_ref, stop)
+        shares = self.size_position(equity, entry_ref, stop, side)
         if self.live and shares >= 1:
-            shares = self._cap_shares(shares, entry_ref)
+            shares = self._cap_shares(shares, entry_ref, side)
         if shares < 1:
             log.info("Signal %s skipped: position size rounds to 0 shares", kind)
             return
-        stop_d = self._round_price(stop, ROUND_DOWN)
-        tgt_d = self._round_price(target_for(entry_ref, stop, cfg), ROUND_UP) if cfg.use_target else None
+        # stops are rounded away from the price, targets toward it... from the far side
+        stop_d = self._round_price(stop, ROUND_DOWN if side > 0 else ROUND_UP)
+        tgt_d = (self._round_price(target_for(entry_ref, stop, cfg), ROUND_UP if side > 0 else ROUND_DOWN)
+                 if cfg.use_target else None)
         if self.live:
+            if side < 0:
+                why = self._why_no_short(shares)
+                if why:
+                    log.info("Signal %s on %s skipped: %s", kind, self.symbol, why)
+                    return
             # The signal used the bar's close; by the time the order goes out the price may already
-            # have fallen to the stop. A broker refuses a stop at or above the price, so check first.
+            # have reached the stop. A broker refuses a stop on the wrong side of the price, so check first.
             try:
                 now_px = self._last_trade_price()
             except Exception as e:
                 now_px = None
                 log.debug("price check failed: %s", e)
-            if now_px is not None and float(stop_d) >= now_px - float(self._tick()):
-                log.info("Signal %s skipped: price %.2f is already at the stop %s (it fell after the bar closed)",
+            if now_px is not None and side * (now_px - float(stop_d)) <= float(self._tick()):
+                log.info("Signal %s skipped: price %.2f is already at the stop %s (it moved after the bar closed)",
                          kind, now_px, stop_d)
                 return
         log.info("ENTER %s %s x%d ~%.2f stop %s target %s", kind, self.symbol, shares, entry_ref, stop_d,
                  tgt_d if tgt_d is not None else "none (trailing stop)")
         ex = self._x(signal_ts) + 1 if signal_ts is not None else self._x(now_et())
-        pos = dict(kind=kind, entry=entry_ref, init_stop=float(stop_d), stop=float(stop_d),
+        pos = dict(kind=kind, side=side, entry=entry_ref, init_stop=float(stop_d), stop=float(stop_d),
                    target=float(tgt_d) if tgt_d is not None else None, shares=shares, signal_ts=signal_ts,
                    entry_x=ex, entry_clock=now_et().strftime("%H:%M"), stop_steps=[[ex, float(stop_d)]])
 
@@ -937,18 +1025,25 @@ class Bot:
             return
 
         base_qty = self.held_quantity()          # shares you already owned - never touched
+        if side < 0 and base_qty != 0:
+            log.info("Signal %s on %s skipped: the account already holds %d shares of it (a short needs a flat "
+                     "position)", kind, self.symbol, base_qty)
+            return
         entry_time = datetime.now(ZoneInfo("UTC"))
         pos["ids_before"] = sorted(map(str, self.my_order_ids))   # orders from earlier trades: not this one's
+        self.pos = pos                            # (the broker hooks read the side from it)
         try:
-            _, fill_price = self._submit_entry(shares, stop_d, tgt_d, entry_ref)
+            _, fill_price = self._submit_entry(shares, stop_d, tgt_d, entry_ref, side)
         except Exception as e:
             # A refused order changes nothing. But a timeout can hide an order that did go through,
             # so look at the account before giving up: shares that arrived are adopted and protected.
             log.warning("Entry order failed: %s", e)
             fill_price = None
-        got = max(0, self.held_quantity() - base_qty)
+        self.pos = None
+        got = max(0, (self.held_quantity() - base_qty) * side)
         if got <= 0:
-            log.warning("No shares were bought - not counted as a trade; still watching for setups.")
+            log.warning("No shares were %s - not counted as a trade; still watching for setups.",
+                        "bought" if side > 0 else "sold short")
             return
         self.trades_today += 1
         pos.update(entry=fill_price if fill_price is not None else entry_ref, shares=min(got, shares),
@@ -957,6 +1052,17 @@ class Bot:
         self._record("entry", 0.0)
         self.save_state()                         # a crash from here on still knows about these shares
         self.ensure_stop(wait_seconds=15)
+
+    def _why_no_short(self, qty: int) -> str | None:
+        """Reason a short can't be opened in the active symbol now (None = go ahead). In a dry run the
+        broker is still asked when it can be, so the simulation skips what the real account would."""
+        try:
+            return self.short_check(self.symbol, qty)
+        except Exception as e:
+            if self.live:
+                return f"couldn't check whether it can be shorted ({e})"
+            log.debug("short check failed in dry run: %s", e)
+            return None
 
     def _stop_price_of(self, order) -> float | None:
         """The trigger price of a stop order as the broker has it now (Public and Alpaca)."""
@@ -977,9 +1083,10 @@ class Bot:
         except Exception as e:
             log.debug("stop check failed: %s", e)
             return
-        if px is None or px <= self.pos["stop"] + 1e-9:
+        side = self.pos.get("side", 1)
+        if px is None or not better_stop(px, self.pos["stop"], side):
             return
-        log.info("Stop for %s is %.2f at the broker (raised by hand?) - the bot now uses %.2f, up from %.2f",
+        log.info("Stop for %s is %.2f at the broker (moved by hand?) - the bot now uses %.2f instead of %.2f",
                  self.symbol, px, px, self.pos["stop"])
         self.pos["stop"] = px
         step_x = (self._x(self.last_bar_seen) + 1) if self.last_bar_seen is not None else self._x(now_et())
@@ -1000,16 +1107,18 @@ class Bot:
         qty = self.bot_shares()
         if qty <= 0:
             return
-        oid = self._place_stop(qty, self._round_price(self.pos["stop"], ROUND_DOWN))
+        oid = self._place_stop(qty, self._round_price(self.pos["stop"], ROUND_DOWN if self.pos.get("side", 1) > 0
+                                                      else ROUND_UP))
         self.my_order_ids.add(oid)
         log.warning("No stop found for %d %s - placed standalone stop at %.2f (order %s)",
                     qty, self.symbol, self.pos["stop"], oid)
 
     def raise_stop(self, new_stop: float) -> None:
-        """Move the stop up. Live: reprice the existing stop order in one step, so a stop is
-        always in place. If the broker refuses, the old stop stays and we retry next bar."""
-        new_d = self._round_price(new_stop, ROUND_DOWN)
-        if float(new_d) <= self.pos["stop"]:
+        """Tighten the stop (up for a long, down for a short). Live: reprice the existing stop order in one
+        step, so a stop is always in place. If the broker refuses, the old stop stays and we retry next bar."""
+        side = self.pos.get("side", 1)
+        new_d = self._round_price(new_stop, ROUND_DOWN if side > 0 else ROUND_UP)
+        if not better_stop(float(new_d), self.pos["stop"], side):
             return
         log.info("TRAIL stop %s %.2f -> %s", self.symbol, self.pos["stop"], new_d)
         step_x = (self._x(self.last_bar_seen) + 1) if self.last_bar_seen is not None else self._x(now_et())
@@ -1027,7 +1136,7 @@ class Bot:
             self.pos["stop"] = float(new_d)
             self.pos["stop_steps"].append([step_x, float(new_d)])
         except Exception as e:
-            log.error("Could not raise stop (keeping %.2f, will retry next bar): %s", self.pos["stop"], e)
+            log.error("Could not move the stop (keeping %.2f, will retry next bar): %s", self.pos["stop"], e)
 
     def flatten(self, reason: str) -> None:
         if not self.symbol:
@@ -1074,15 +1183,18 @@ class Bot:
                 oid, price = self._market_sell(qty)
             except Exception as e:                         # e.g. shares still held by a pending cancel
                 last = e
-                log.warning("sell %d %s refused (%s) - retrying in 5 s", qty, self.symbol, e)
+                log.warning("%s %d %s refused (%s) - retrying in 5 s", self._exit_verb(), qty, self.symbol, e)
                 _time.sleep(5)
                 continue
             self.my_order_ids.add(oid)
-            log.info("FLATTEN (%s): sell %d %s, order %s", reason, qty, self.symbol, oid)
+            log.info("FLATTEN (%s): %s %d %s, order %s", reason, self._exit_verb(), qty, self.symbol, oid)
             if price is not None:
                 self._close_pos(price, reason)
             return
-        raise RuntimeError(f"could not sell {self.symbol} after 6 tries: {last}")
+        raise RuntimeError(f"could not {self._exit_verb()} {self.symbol} after 6 tries: {last}")
+
+    def _exit_verb(self) -> str:
+        return "buy back" if self.pos and self.pos.get("side", 1) < 0 else "sell"
 
     def still_holding(self) -> int:
         try:
@@ -1107,7 +1219,8 @@ class Bot:
             price = None
         if price is None:
             price = self.last_close
-        reason = "target" if (self.pos["target"] and price >= self.pos["target"]) else "stop"
+        side, tgt = self.pos.get("side", 1), self.pos["target"]
+        reason = "target" if (tgt and side * (price - tgt) >= -1e-9) else "stop"
         self._close_pos(price, reason)
 
     def _position_order_ids(self) -> set[str]:
@@ -1125,6 +1238,12 @@ class Bot:
         p = self.pos
         if not p:
             return
+        if p.get("side", 1) < 0:                       # short: stop above, target below
+            if bar["high"] >= p["stop"]:
+                self._close_pos(max(bar["open"], p["stop"]), "stop")
+            elif p["target"] is not None and bar["low"] <= p["target"]:
+                self._close_pos(min(bar["open"], p["target"]), "target")
+            return
         if bar["low"] <= p["stop"]:
             self._close_pos(min(bar["open"], p["stop"]), "stop")
         elif p["target"] is not None and bar["high"] >= p["target"]:
@@ -1132,16 +1251,17 @@ class Bot:
 
     def _close_pos(self, price: float, reason: str) -> None:
         p = self.pos
-        if reason == "stop" and p["stop"] > p["init_stop"]:
+        side = p.get("side", 1)
+        if reason == "stop" and better_stop(p["stop"], p["init_stop"], side):
             reason = "trail"
-        pnl = (price - p["entry"]) * p["shares"] * self.point_value
+        pnl = (price - p["entry"]) * p["shares"] * self.point_value * side
         if not self.live:
             self.paper_pnl += pnl
         log.info("%sEXIT %s @ %.2f (%s) P&L %.2f", "" if self.live else "[paper] ", self.symbol, price, reason, pnl)
         self._record(reason, pnl, exit_price=price)
         exit_x = self._x(self.last_bar_seen) if (self.last_bar_seen is not None and reason not in
                                                  ("end of day", "kill switch")) else min(390 / self.bm - 1, self._x(now_et()))
-        self.closed.append(dict(symbol=self.symbol, kind=p["kind"], shares=p["shares"], entry=p["entry"], exit=price, pnl=pnl,
+        self.closed.append(dict(symbol=self.symbol, kind=p["kind"], side=side, shares=p["shares"], entry=p["entry"], exit=price, pnl=pnl,
                                 reason=reason, entry_time=p["entry_clock"], exit_time=now_et().strftime("%H:%M"),
                                 entry_x=p["entry_x"], exit_x=max(exit_x, p["entry_x"])))
         self.pos = None
@@ -1217,7 +1337,7 @@ class Bot:
             df = normalize(pd.concat([h, tb])) if h is not None and len(h) else tb
             d = add_indicators(df, cfg)
             lo, hi = find_swings(d, cfg.swing_n)
-            frames[sym] = (d, lo, hi)
+            frames[sym] = (d, lo, hi, mirror(d) if cfg.direction != "long" or self._is_short() else None)
             try:
                 self.views[sym] = self._make_view(d, lo, hi)
                 self.watch_info[sym] = self._line_note(d, self.views[sym])
@@ -1251,20 +1371,22 @@ class Bot:
         if self.pos:
             self.ensure_stop()
             self.sync_stop_from_broker()
+            side = self.pos.get("side", 1)
             if cfg.trail_stop and self.symbol in frames:
-                d, lo, hi = frames[self.symbol]
+                d, lo, hi, md = frames[self.symbol]
                 t = len(d) - 1
                 ts = self.pos.get("signal_ts")
                 from_bar = d.index.get_loc(ts) if ts is not None and ts in d.index else t
-                new_stop = trailing_stop(d, t, cfg, lo, from_bar, self.pos["stop"])
-                if new_stop > self.pos["stop"]:
+                new_stop = sided_trailing_stop(d, md, t, cfg, lo, hi, from_bar, self.pos["stop"], side)
+                if better_stop(new_stop, self.pos["stop"], side):
                     self.raise_stop(new_stop)
             if self.pos and self.symbol in frames:
                 p, close = self.pos, float(frames[self.symbol][0]["close"].iat[-1])
-                be = breakeven_stop(p["entry"], p["init_stop"], close, p["stop"], cfg)
-                if be > p["stop"]:
-                    log.info("BREAKEVEN %s: price %.2f is %.1fR above entry - stop up to the entry price",
-                             self.symbol, close, (close - p["entry"]) / (p["entry"] - p["init_stop"]))
+                be = sided_breakeven_stop(p["entry"], p["init_stop"], close, p["stop"], cfg, side)
+                if better_stop(be, p["stop"], side):
+                    log.info("BREAKEVEN %s: price %.2f is %.1fR %s entry - stop moved to the entry price",
+                             self.symbol, close, side * (close - p["entry"]) / abs(p["entry"] - p["init_stop"]),
+                             "above" if side > 0 else "below")
                     self.raise_stop(be)
             return
 
@@ -1281,10 +1403,10 @@ class Bot:
         for sym in syms:
             if sym not in frames:
                 continue
-            d, lo, hi = frames[sym]
+            d, lo, hi, md = frames[sym]
             if d.index[-1] != newest:
                 continue                                         # no trade in this symbol this bar
-            sig = signal_at(d, len(d) - 1, cfg, lo, hi)
+            sig = signals_at(d, md, len(d) - 1, cfg, lo, hi)
             if not sig:
                 continue
             log.info("SIGNAL %s on %s bar %s: line %.2f, stop %.2f",
@@ -1294,7 +1416,7 @@ class Bot:
             self.last_price = self.last_close
             if sym in self.views:
                 self.view = self.views[sym]
-            self.enter(sig.ref_price, sig.stop, sig.kind, signal_ts=newest)
+            self.enter(sig.ref_price, sig.stop, sig.kind, signal_ts=newest, side=sig.side)
             if self.pos:
                 return
         if self.symbol != before and not self.pos and before:
@@ -1398,9 +1520,10 @@ class Bot:
         pos = None
         unreal = 0.0
         if p:
-            unreal = (last - p["entry"]) * p["shares"] * self.point_value if last is not None else 0.0
-            risk = (p["entry"] - p["init_stop"]) * p["shares"] * self.point_value
-            pos = dict(kind=p["kind"], shares=p["shares"], entry=p["entry"], stop=p["stop"], init_stop=p["init_stop"],
+            side = p.get("side", 1)
+            unreal = (last - p["entry"]) * p["shares"] * self.point_value * side if last is not None else 0.0
+            risk = abs(p["entry"] - p["init_stop"]) * p["shares"] * self.point_value
+            pos = dict(kind=p["kind"], side=side, shares=p["shares"], entry=p["entry"], stop=p["stop"], init_stop=p["init_stop"],
                        entry_x=p["entry_x"], entry_time=p["entry_clock"], stop_steps=p["stop_steps"],
                        unreal=unreal, risk_dollars=risk, r=(unreal / risk) if risk else None)
         spendable = None
@@ -1463,7 +1586,7 @@ class Bot:
 
     def _auto_state(self) -> str:
         if self.pos:
-            return f"In a trade - stop {self.pos['stop']:.2f}"
+            return f"In a {'short ' if self._is_short() else ''}trade - stop {self.pos['stop']:.2f}"
         if self.halted:
             return "Loss limit hit - watching only"
         if self.trades_today >= self.cfg.max_trades_per_day:
@@ -1549,15 +1672,16 @@ class Bot:
             if now.time() >= flatten_at:
                 self.flatten("end of day")
                 while self.still_holding() > 0 and now_et().time() < time(15, 59, 30):
-                    log.error("%s: %d shares still held - trying to sell again", self.symbol, self.still_holding())
-                    self.publish(f"NOT FLAT - still trying to sell {self.symbol}")
+                    log.error("%s: %d shares still open - trying to %s again", self.symbol, self.still_holding(),
+                              self._exit_verb())
+                    self.publish(f"NOT FLAT - still trying to {self._exit_verb()} {self.symbol}")
                     _time.sleep(20)
                     self.flatten("end of day")
                 left = self.still_holding()
                 if left > 0:
-                    log.critical("COULD NOT SELL %d %s BEFORE THE CLOSE. It is still open with no stop - "
-                                 "close it in your broker's app.", left, self.symbol)
-                    self.not_flat = dict(symbol=self.symbol, shares=left)
+                    log.critical("COULD NOT %s %d %s BEFORE THE CLOSE. It is still open with no stop - "
+                                 "close it in your broker's app.", self._exit_verb().upper(), left, self.symbol)
+                    self.not_flat = dict(symbol=self.symbol, shares=left, side=self.pos.get("side", 1) if self.pos else 1)
                 log.info("Session done. Trades: %d, day P&L: %.2f", self.trades_today, self.day_pnl())
                 self.final = True
                 self.publish("Session finished")

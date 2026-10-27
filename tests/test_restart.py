@@ -195,3 +195,33 @@ def test_a_sale_price_that_cannot_be_right_is_not_used(tmp_path, monkeypatch, ca
     monkeypatch.setattr(a, "_filled_sell_price", lambda ids: 84.32)
     a._check_live_exit()
     assert a.closed[-1]["exit"] == 30.41 and "doesn't fit" in caplog.text
+
+
+def test_restart_takes_over_an_open_short(tmp_path, monkeypatch):
+    new_bot, t, clock = _setup(tmp_path, monkeypatch)
+    a = new_bot(direction="short")
+    monkeypatch.setattr(a, "_last_trade_price", lambda: t.price)
+    a.prepare()
+    clock["t"] = clock["t"].replace(hour=10)
+    a.enter(50.0, 51.0, "short bounce", side=-1)
+    assert t.pos["AAPL"] < 0
+    b = new_bot(direction="short")
+    b.prepare()
+    assert b.pos["side"] == -1 and b.bot_shares() == a.pos["shares"]
+    b.raise_stop(50.5)
+    assert [float(o.stop_price) for o in t.open_stops()] == [50.5]
+    b.flatten("end of day")
+    assert t.pos["AAPL"] == 0 and b.closed[-1]["side"] == -1
+
+
+def test_yesterdays_unclosed_short_is_reported(tmp_path, monkeypatch):
+    new_bot, t, clock = _setup(tmp_path, monkeypatch)
+    a = new_bot(direction="short")
+    monkeypatch.setattr(a, "_last_trade_price", lambda: t.price)
+    a.prepare()
+    clock["t"] = clock["t"].replace(hour=10)
+    a.enter(50.0, 51.0, "short bounce", side=-1)
+    clock["t"] = clock["t"] + pd.Timedelta(days=1)
+    b = new_bot()
+    b.prepare()
+    assert b.leftover and b.leftover["shares"] == a.pos["shares"] and b.leftover["side"] == -1

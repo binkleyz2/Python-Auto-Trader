@@ -1,8 +1,30 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.6.2 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.7.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.7.0 – 2026-10-26
+
+- **Shorts.** New setting `direction`: `long` (default, unchanged), `short` or `both`. Still one position at a
+  time. Shorts use exactly the long rules on the chart turned upside down:
+  - bounce off falling resistance, breakdown below rising support;
+  - stop above the line, trailing over swing highs and only moving down;
+  - breakeven and target below the entry; bought back at 15:50.
+  Risk per trade, the daily loss limit, the trade limit and the largest position apply to both sides.
+- **Shorting rules:** a margin account is needed (at least $2,000 at Alpaca and Public). Only easy-to-borrow
+  stocks; hard-to-borrow and non-shortable stocks are skipped. No short while you hold shares of that stock.
+  Short size is limited by the broker's short buying power and never more than the account value. Longs keep
+  the cash and settled-cash rules. A dry run checks the same things, so it skips the same trades.
+- **Brokers:** Alpaca shorts are bracket orders like longs. Public: market short sale plus a separate buy
+  stop (no target on a Public short; skipped while the short-sale restriction is on). NinjaTrader: a sell
+  with the stop attached.
+- The morning scan ranks short setups too ("short: near resistance", "short: near support") and keeps each
+  stock's better setup. The backtest trades shorts and reports long and short results separately.
+- Dashboard: "Short" on the position tile, the stop shown above the price, and wording that fits both sides.
+  `fix_exit` handles shorts.
+- `config.example.yaml` has the new `direction` line; without it your `config.yaml` stays long only.
+- Two positions at once (one long, one short) is planned for a later version.
 
 ## v1.6.2 – 2026-10-26
 

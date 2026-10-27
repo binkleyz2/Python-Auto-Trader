@@ -35,7 +35,10 @@ touch_tolerance_atr: 0.25
 break_tolerance_atr: 0.10
 breakout_volume_mult: 1.2
 
-# Long only: bounces off rising support, breakouts through falling resistance
+# Long: bounces off rising support, breakouts through falling resistance.
+# Short: bounces off falling resistance, breakdowns through rising support.
+direction: long             # long, short or both. Shorts need a margin account (at least $2,000) and
+                            # stocks that can be borrowed; the same rules apply, mirrored.
 enable_bounce: true
 enable_breakout: true
 stop_buffer_atr: 0.25

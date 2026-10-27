@@ -1,4 +1,5 @@
 """Dry-run bot against a fake Public client: checks it never places orders and paper-trades sensibly."""
+import pytest
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -95,7 +96,36 @@ class FakeBroker:
     def trigger_stop(self, at):
         for o in self.open_stops():
             o.status, o.average_price = "FILLED", self.D(str(at))
-            self.held["AAPL"] -= int(o.quantity)
+            self.held["AAPL"] += int(o.quantity) if o.side == "BUY" else -int(o.quantity)
+
+    # -- shorts
+    shortable = "EASY_TO_BORROW"
+    uptick = "NOT_TRIGGERED"
+
+    def get_instrument(self, symbol, instrument_type):
+        return SimpleNamespace(shorting_availability=self.shortable)
+
+    def preflight_short_order(self, symbol, quantity):
+        return SimpleNamespace(short_selling=SimpleNamespace(uptick_rule=self.uptick))
+
+    def place_short_order(self, symbol, quantity, **kw):
+        oid = str(__import__("uuid").uuid4())
+        self.sent.append(SimpleNamespace(kind="short", qty=int(quantity), **kw))
+        self._order(oid, "SELL", "MARKET", int(quantity), status="FILLED", avg=self.D(str(self.price)))
+        self.held["AAPL"] -= int(quantity)
+        broker = self
+
+        class NewOrder:
+            order_id = oid
+            def wait_for_fill(self, timeout):
+                o = broker.orders[oid]
+                return SimpleNamespace(filled_quantity=o.quantity, average_price=o.average_price)
+            def cancel(self):
+                pass
+        return NewOrder()
+
+    def get_quotes(self, instruments):
+        return [SimpleNamespace(last=self.D(str(self.price)))]
 
     # -- API surface used by the bot
     def get_portfolio(self):
@@ -247,3 +277,43 @@ def test_no_bars_yet_does_not_crash(tmp_path, monkeypatch):
     monkeypatch.setattr(live, "now_et", lambda: datetime(2026, 6, 4, 9, 36, tzinfo=ET))
     bot.step()                                                # must simply return
     assert bot.pos is None
+
+
+
+def test_public_short_sale_gets_a_buy_stop_at_once(tmp_path, monkeypatch):
+    b = FakeBroker(price=50.0)
+    bot = _bot(b, tmp_path, monkeypatch, direction="short")
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    assert b.sent[0].kind == "short" and b.sent[0].qty == 125 and b.held["AAPL"] == -125
+    stops = b.open_stops()
+    assert len(stops) == 1 and stops[0].side == "BUY" and float(stops[0].stop_price) == 51.0
+    assert bot.pos["side"] == -1 and bot.bot_shares() == 125
+    bot.raise_stop(50.5)
+    assert [float(o.stop_price) for o in b.open_stops()] == [50.5]
+    b.trigger_stop(at=50.5)
+    bot._check_live_exit()
+    c = bot.closed[-1]
+    assert bot.pos is None and c["exit"] == 50.5 and c["pnl"] == -0.5 * 125 and b.held["AAPL"] == 0
+
+
+def test_public_short_flatten_buys_to_close(tmp_path, monkeypatch):
+    b = FakeBroker(price=50.0)
+    bot = _bot(b, tmp_path, monkeypatch, direction="short")
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    b.price = 49.0
+    bot.flatten("end of day")
+    cover = [r for r in b.sent if getattr(r, "order_type", None) is not None and r.order_type.value == "MARKET"]
+    assert len(cover) == 1 and cover[0].order_side.value == "BUY" and cover[0].open_close_indicator.value == "CLOSE"
+    assert b.held["AAPL"] == 0 and bot.closed[-1]["pnl"] == 125.0
+
+
+@pytest.mark.parametrize("attr,value,why", [("shortable", "HARD_TO_BORROW", "hard to borrow"),
+                                            ("shortable", "NOT_SHORTABLE", "not shortable"),
+                                            ("uptick", "TRIGGERED", "short-sale restriction")])
+def test_public_short_skipped_when_the_broker_would_refuse(tmp_path, monkeypatch, caplog, attr, value, why):
+    caplog.set_level("INFO")
+    b = FakeBroker(price=50.0)
+    setattr(b, attr, value)
+    bot = _bot(b, tmp_path, monkeypatch, direction="short")
+    bot.enter(50.0, 51.0, "short bounce", side=-1)
+    assert not b.sent and bot.pos is None and why in caplog.text

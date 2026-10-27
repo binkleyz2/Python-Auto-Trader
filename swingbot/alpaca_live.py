@@ -24,7 +24,7 @@ import time as _time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from decimal import ROUND_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -218,6 +218,7 @@ class AlpacaBot(Bot):
                      "of the session, and proceeds from today's sales are never reused.")
 
     def held_quantity(self) -> int:
+        """Shares of the active symbol in the account: negative for a short position."""
         from alpaca.common.exceptions import APIError
         try:
             p = self.client.trading.get_open_position(self.symbol)
@@ -225,7 +226,27 @@ class AlpacaBot(Bot):
             if _is_not_found(e):
                 return 0
             raise                                   # a real error must never look like "no shares"
-        return int(Decimal(str(p.qty)))
+        q = int(Decimal(str(p.qty)))
+        if _v(getattr(p, "side", "long")).lower() == "short":
+            q = -abs(q)
+        return q
+
+    def short_buying_power(self) -> float:
+        a = self.client.trading.get_account()
+        if not getattr(a, "shorting_enabled", False):
+            return 0.0
+        return max(0.0, min(float(a.buying_power), float(a.equity)))      # never more than the account value
+
+    def short_check(self, symbol: str, qty: int) -> str | None:
+        a = self.client.trading.get_account()
+        if not getattr(a, "shorting_enabled", False):
+            return "shorting isn't enabled on this Alpaca account (needs margin and $2,000 equity)"
+        asset = self.client.trading.get_asset(symbol)
+        if not getattr(asset, "shortable", False):
+            return "not shortable at Alpaca"
+        if not getattr(asset, "easy_to_borrow", False):
+            return "hard to borrow"
+        return None
 
     # ---------------------------------------------------------------- orders
     def _orders(self) -> list:
@@ -258,20 +279,27 @@ class AlpacaBot(Bot):
             o = self.client.trading.get_order_by_id(order_id)
         return o
 
-    def _submit_entry(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None, entry_ref: float):
+    def _parked_target(self, entry: float, side: int) -> Decimal:
+        """Where the take-profit leg waits when no target is wanted: far above (long) or below (short)."""
+        if side > 0:
+            return _price(entry * (1 + self.cfg.alpaca_far_target_pct / 100), ROUND_UP)
+        return _price(max(0.01, entry * (1 - min(self.cfg.alpaca_far_target_pct, 90) / 100)), ROUND_DOWN)
+
+    def _submit_entry(self, shares: int, stop_d: Decimal, tgt_d: Decimal | None, entry_ref: float, side: int = 1):
         from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
         from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
         # Alpaca can only reprice the stop of a full bracket, so with no target wanted the target is
-        # parked far above the price where it won't fill during the day.
-        target = tgt_d if tgt_d is not None else _price(entry_ref * (1 + self.cfg.alpaca_far_target_pct / 100), ROUND_UP)
+        # parked far away from the price where it won't fill during the day.
+        target = tgt_d if tgt_d is not None else self._parked_target(entry_ref, side)
         o = self.client.trading.submit_order(MarketOrderRequest(
-            symbol=self.symbol, qty=shares, side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
+            symbol=self.symbol, qty=shares, side=OrderSide.BUY if side > 0 else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
             order_class=OrderClass.BRACKET, client_order_id=str(uuid.uuid4()),
             stop_loss=StopLossRequest(stop_price=float(stop_d)),
             take_profit=TakeProfitRequest(limit_price=float(target))))
         oid = str(o.id)
         self.my_order_ids.add(oid)
-        log.info("bracket order submitted: %s (stop %s, %s %s)", oid, stop_d,
+        log.info("%sbracket order submitted: %s (stop %s, %s %s)", "short " if side < 0 else "", oid, stop_d,
                  "target" if tgt_d is not None else "parked target", target)
         o = self._wait_fill(oid)
         if _v(o.status).lower() == "filled":
@@ -288,8 +316,8 @@ class AlpacaBot(Bot):
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import StopOrderRequest
         o = self.client.trading.submit_order(StopOrderRequest(
-            symbol=self.symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
-            stop_price=float(stop_d), client_order_id=str(uuid.uuid4())))
+            symbol=self.symbol, qty=qty, side=OrderSide.BUY if self._exit_side() == "BUY" else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY, stop_price=float(stop_d), client_order_id=str(uuid.uuid4())))
         return str(o.id)
 
     def _replace_stop(self, so, new_d: Decimal) -> str:
@@ -298,13 +326,13 @@ class AlpacaBot(Bot):
         return str(o.id)
 
     def _set_target(self, price: float | None) -> None:
-        """Move the take-profit leg of the open bracket (None = park it far above, i.e. no target)."""
+        """Move the take-profit leg of the open bracket (None = park it far away, i.e. no target)."""
         from alpaca.trading.requests import ReplaceOrderRequest
-        leg = next((o for o in self._my_open_orders() if o.side == "SELL" and o.type == "LIMIT"), None)
+        exit_side = self._exit_side()
+        leg = next((o for o in self._my_open_orders() if o.side == exit_side and o.type == "LIMIT"), None)
         if leg is None:
             raise RuntimeError("no take-profit leg found on the open bracket order")
-        px = price if price is not None else float(
-            _price(self.pos["entry"] * (1 + self.cfg.alpaca_far_target_pct / 100), ROUND_UP))
+        px = price if price is not None else float(self._parked_target(self.pos["entry"], self.pos.get("side", 1)))
         o = self.client.trading.replace_order_by_id(leg.id, ReplaceOrderRequest(limit_price=float(px)))
         self.my_order_ids.add(str(o.id))
 
@@ -315,18 +343,20 @@ class AlpacaBot(Bot):
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import MarketOrderRequest
         o = self.client.trading.submit_order(MarketOrderRequest(
-            symbol=self.symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
-            client_order_id=str(uuid.uuid4())))
+            symbol=self.symbol, qty=qty, side=OrderSide.BUY if self._exit_side() == "BUY" else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY, client_order_id=str(uuid.uuid4())))
         oid = str(o.id)
         o = self._wait_fill(oid)
         if _v(o.status).lower() == "filled":
             return oid, float(o.filled_avg_price)
-        log.error("sell not confirmed (status %s) - CHECK THE ACCOUNT", _v(o.status))
+        log.error("%s not confirmed (status %s) - CHECK THE ACCOUNT", self._exit_verb(), _v(o.status))
         return oid, None
 
     def _filled_sell_price(self, order_ids) -> float | None:
-        """Average price of this symbol's filled sells among `order_ids` (weighted by shares)."""
+        """Average price of this symbol's filled exits among `order_ids` (sells for a long, buys for a
+        short; weighted by shares)."""
         qty = value = 0.0
+        want = self._exit_side().lower()
         for oid in order_ids:
             try:
                 o = self.client.trading.get_order_by_id(oid)
@@ -335,7 +365,7 @@ class AlpacaBot(Bot):
             sym = getattr(o, "symbol", None)
             if sym and self.symbol and str(sym).upper() != self.symbol.upper():
                 continue
-            if _v(o.side).lower() == "sell" and getattr(o, "filled_avg_price", None) is not None \
+            if _v(o.side).lower() == want and getattr(o, "filled_avg_price", None) is not None \
                     and float(getattr(o, "filled_qty", 0) or 0) > 0:
                 q = float(o.filled_qty)
                 qty, value = qty + q, value + q * float(o.filled_avg_price)

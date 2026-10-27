@@ -1,4 +1,10 @@
-"""Swing-point trend lines and long-only bounce / breakout signals.
+"""Swing-point trend lines and bounce / breakout signals, long and (optionally) short.
+
+Shorts use exactly the same rules, mirrored: the price chart is turned upside down (every price
+negated, highs and lows swapped), the long rules are applied, and the result is turned back. So a
+short bounce off falling resistance is a long bounce off rising support on the flipped chart, a
+short breakdown through rising support is a long breakout, and a stop above swing highs that only
+moves down is a stop under swing lows that only moves up.
 
 Everything here works on 5-minute bars (regular hours) and is written so a
 decision at bar ``t`` only uses information that existed when bar ``t`` closed:
@@ -153,12 +159,13 @@ def resistance_line(df, t, cfg, is_high) -> TrendLine | None:
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Signal:
-    kind: str           # "bounce" or "breakout"
+    kind: str           # "bounce" or "breakout"; shorts: "short bounce" or "short breakdown"
     bar: int            # index of the bar whose close triggered it
     line: TrendLine
     line_value: float
     stop: float
     ref_price: float    # close of the signal bar (used for sizing in live mode)
+    side: int = 1       # 1 = long, -1 = short
 
 
 def signal_at(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray, is_high: np.ndarray) -> Signal | None:
@@ -206,8 +213,9 @@ def signal_at(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray, is_high
 
 def min_stop_price(price: float, cfg: Config) -> float:
     """Highest stop allowed: at least min_stop_pct below the price. Keeps stops on short bars (tiny ATR)
-    from sitting inside the bid-ask spread. The max_stop_atr limit is checked before this floor."""
-    return price * (1 - cfg.min_stop_pct / 100)
+    from sitting inside the bid-ask spread. The max_stop_atr limit is checked before this floor.
+    (Written as a distance, so it also holds on the flipped chart used for shorts.)"""
+    return price - abs(price) * cfg.min_stop_pct / 100
 
 
 def breakeven_stop(entry: float, init_stop: float, close: float, current_stop: float, cfg: Config) -> float:
@@ -251,3 +259,62 @@ def trailing_stop(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray,
     if candidate - current_stop < cfg.trail_min_step_atr * atr:     # skip tiny moves (fewer order changes)
         return current_stop
     return candidate
+
+
+# --------------------------------------------------------------------------- #
+# Shorts: the same rules on the flipped chart
+# --------------------------------------------------------------------------- #
+def mirror(df: pd.DataFrame) -> pd.DataFrame:
+    """The chart upside down: prices negated, highs and lows swapped. ATR and volume are unchanged.
+    Swing highs of ``df`` are the swing lows of ``mirror(df)`` and vice versa."""
+    out = df.copy()
+    out["open"], out["close"] = -df["open"], -df["close"]
+    out["high"], out["low"] = -df["low"], -df["high"]
+    return out
+
+
+def _unmirror_line(L: TrendLine) -> TrendLine:
+    return TrendLine("resistance" if L.kind == "support" else "support", L.i1, L.i2, -L.p1, -L.p2, L.touches)
+
+
+def short_signal_at(md: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray, is_high: np.ndarray) -> Signal | None:
+    """Short signal on the close of bar ``t``. ``md`` = mirror(df with indicators); ``is_low``/``is_high``
+    are the swings of the real chart. Returns real prices: the stop is above the entry."""
+    s = signal_at(md, t, cfg, is_high, is_low)
+    if s is None:
+        return None
+    kind = "short bounce" if s.kind == "bounce" else "short breakdown"
+    return Signal(kind, s.bar, _unmirror_line(s.line), -s.line_value, -s.stop, -s.ref_price, side=-1)
+
+
+def signals_at(d: pd.DataFrame, md: pd.DataFrame | None, t: int, cfg: Config, is_low, is_high) -> Signal | None:
+    """Long and/or short signal per ``cfg.direction``. A long signal needs a rising bar and a short one a
+    falling bar, so both can't fire on the same bar."""
+    if cfg.direction in ("long", "both"):
+        s = signal_at(d, t, cfg, is_low, is_high)
+        if s:
+            return s
+    if cfg.direction in ("short", "both"):
+        return short_signal_at(md if md is not None else mirror(d), t, cfg, is_low, is_high)
+    return None
+
+
+def sided_trailing_stop(d: pd.DataFrame, md: pd.DataFrame | None, t: int, cfg: Config, is_low, is_high,
+                        from_bar: int, current_stop: float, side: int) -> float:
+    """Long: trails under swing lows, only up. Short: trails over swing highs, only down."""
+    if side > 0:
+        return trailing_stop(d, t, cfg, is_low, from_bar, current_stop)
+    md = md if md is not None else mirror(d)
+    return -trailing_stop(md, t, cfg, is_high, from_bar, -current_stop)
+
+
+def sided_breakeven_stop(entry: float, init_stop: float, close: float, current_stop: float, cfg: Config,
+                         side: int) -> float:
+    if side > 0:
+        return breakeven_stop(entry, init_stop, close, current_stop, cfg)
+    return -breakeven_stop(-entry, -init_stop, -close, -current_stop, cfg)
+
+
+def better_stop(new: float, old: float, side: int) -> bool:
+    """True if ``new`` is tighter than ``old`` (higher for a long, lower for a short)."""
+    return new > old + 1e-9 if side > 0 else new < old - 1e-9
