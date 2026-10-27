@@ -1,8 +1,14 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.6.1 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.6.2 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.6.2 – 2026-10-26
+
+- Fix: `py -m swingbot.fix_exit` said "Set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env" although `.env`
+  had them. It didn't read `.env`; now it does, like `py -m swingbot run`.
+- `.env` is also read from the folder you start the bot in, not only the bot's own folder.
 
 ## v1.6.1 – 2026-10-26
 

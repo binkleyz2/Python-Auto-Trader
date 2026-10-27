@@ -23,7 +23,8 @@ from .config import Config
 def _env():
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(Path.cwd() / ".env")         # the folder you run it from
+        load_dotenv()                            # and the bot's own folder (keeps values already set)
     except ImportError:
         pass
 

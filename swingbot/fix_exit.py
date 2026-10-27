@@ -85,6 +85,8 @@ def main(argv=None) -> None:
         sys.exit(__doc__)
     day, sym = argv[0], argv[1].upper()
     price = float(argv[2]) if len(argv) == 3 else None
+    from .__main__ import _env
+    _env()                                       # API keys from .env, as `py -m swingbot run` does
     from .config import Config
     cfg = Config.load("config.yaml")
     logs = Path("logs")

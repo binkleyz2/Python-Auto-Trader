@@ -78,3 +78,24 @@ def test_breakeven_stop_fill_is_called_trail(folder):
     fix_exit.main([DAY, "BUSE", "30.46"])
     st = json.loads((folder / "logs" / f"{DAY}-state.json").read_text(encoding="utf-8"))
     assert st["closed"][-1]["reason"] == "trail" and st["closed"][-1]["pnl"] == 0
+
+
+def test_reads_the_api_keys_from_env(folder, monkeypatch):
+    """2026-10-26: 'Set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env' although .env had them."""
+    import os
+    for k in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    (folder / ".env").write_text("ALPACA_API_KEY=k1\nALPACA_SECRET_KEY=s1\n", encoding="utf-8")
+    seen = {}
+
+    def client(cfg):
+        seen.update(key=os.environ.get("ALPACA_API_KEY"), secret=os.environ.get("ALPACA_SECRET_KEY"))
+        leg = SimpleNamespace(side="sell", filled_qty="775", filled_avg_price="30.67",
+                              filled_at=datetime(2026, 10, 26, 15, 45, 5, tzinfo=ET), legs=[])
+        return SimpleNamespace(trading=SimpleNamespace(get_orders=lambda req: [leg]), close=lambda: None)
+    import swingbot.alpaca_live as al
+    monkeypatch.setattr(al, "make_alpaca_client", client)
+    fix_exit.main([DAY, "BUSE"])
+    assert seen == {"key": "k1", "secret": "s1"}
+    for k in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY"):
+        os.environ.pop(k, None)
