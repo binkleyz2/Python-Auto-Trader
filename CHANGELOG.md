@@ -1,8 +1,14 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.8.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.8.1 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.8.1 – 2026-10-27
+
+- The test run no longer shows "DeprecationWarning: websockets.legacy is deprecated". It comes from the
+  alpaca-py library (still in its latest version, 0.44.0), not from swingbot, and is harmless; `pytest.ini`
+  now hides that one warning. Nothing else changed.
 
 ## v1.8.0 – 2026-10-27
 
