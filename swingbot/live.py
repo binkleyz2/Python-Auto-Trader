@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import threading
 import time as _time
@@ -179,12 +180,17 @@ class Bot:
             log.info("TODAY'S PICK: %s - chosen by you, %d-minute bars, scan skipped", sym, self.bm)
             return
         scfg = self.scan_cfg()
-        log.info("Scanning %d symbols%s", len(scfg.watchlist),
-                 f" from {self.cfg.watchlist_file}" if self.cfg.watchlist_file and scfg.watchlist is self.cfg.watchlist else "")
+        symbols = self.scan_symbols(scfg)
+        public_data = self.broker_name == "Public" or self.cfg.price_data == "public"
+        log.info("Scanning %d symbols%s%s", len(symbols),
+                 f" from {self.cfg.watchlist_file}" if self.cfg.watchlist_file and not self.cfg.watchlist_indexes
+                 and scfg.watchlist is self.cfg.watchlist else "",
+                 f" (about {len(symbols) / max(1.0, self.cfg.public_rate_limit) / 60:.0f} minutes at "
+                 f"{self.cfg.public_rate_limit:g} a second)" if public_data and len(symbols) > 600 else "")
         t0 = _time.monotonic()
-        raw = self.fetch_many(scfg.watchlist, "WEEK")
+        raw = self.fetch_many(symbols, "WEEK")
         hist = {sym: df[df.index.date < today] if not df.empty else df for sym, df in raw.items()}
-        log.info("Scan data: %d of %d symbols in %.0f s", len(hist), len(scfg.watchlist), _time.monotonic() - t0)
+        log.info("Scan data: %d of %d symbols in %.0f s", len(hist), len(symbols), _time.monotonic() - t0)
         try:
             liq = self.liquidity(list(hist))
         except Exception as e:
@@ -192,6 +198,44 @@ class Bot:
             liq = None
         self.scan_results = scan(hist, scfg, dollar_volume=liq)
         self._take_scan(hist, "TODAY'S PICK")
+
+    def scan_symbols(self, scfg: Config) -> list[str]:
+        """Today's list to scan: the indexes in watchlist_indexes (downloaded daily) plus your own watchlist,
+        each stock once, keeping only stocks the broker can trade. Worked out once a day."""
+        today = now_et().date()
+        if getattr(self, "_scan_list", None) and self._scan_list[0] == today:
+            return self._scan_list[1]
+        syms = list(dict.fromkeys(s.upper() for s in scfg.watchlist))
+        if self.cfg.watchlist_indexes and scfg.watchlist is self.cfg.watchlist:     # stocks, not futures
+            from .indexes import daily_watchlist
+            syms, counts = daily_watchlist(list(self.cfg.watchlist_indexes), syms, self.workdir / "logs" / "indexes",
+                                           self.cfg.min_price)
+            log.info("Watchlist today: %s = %d different stocks",
+                     " + ".join(f"{k} {v}" for k, v in counts.items()), len(syms))
+        if scfg.watchlist is self.cfg.watchlist:
+            try:
+                ok = self.tradable_symbols()
+            except Exception as e:
+                ok = None
+                log.warning("Couldn't get the list of tradable stocks (%s) - scanning all %d; an order in a stock "
+                            "the broker doesn't trade would be refused and not counted", e, len(syms))
+            if ok is not None:
+                key = lambda s: re.sub(r"[^A-Z0-9]", "", s.upper())
+                okk = {key(s) for s in ok}
+                out = [s for s in syms if key(s) in okk]
+                if len(out) < len(syms):
+                    gone = [s for s in syms if key(s) not in okk]
+                    log.info("%d of %d not tradable %s - left out%s", len(gone), len(syms), self.tradable_note,
+                             f": {', '.join(gone[:15])}{' ...' if len(gone) > 15 else ''}")
+                syms = out
+        self._scan_list = (today, syms)
+        return syms
+
+    tradable_note = "at Public"
+
+    def tradable_symbols(self) -> set[str] | None:
+        """Every stock symbol the broker lets you buy and sell now (None = no check)."""
+        return public_tradable(self.client)
 
     def _take_scan(self, hist: dict, label: str) -> bool:
         """Watch the best-ranked symbols from self.scan_results. False if nothing has a setup."""
@@ -394,16 +438,17 @@ class Bot:
             return False
         now = now_et()
         scfg = self.scan_cfg()
-        self.publish(f"Rescanning {len(scfg.watchlist)} symbols")
+        symbols = self.scan_symbols(scfg)
+        self.publish(f"Rescanning {len(symbols)} symbols")
         t0 = _time.monotonic()
-        raw = self.fetch_many(scfg.watchlist, "WEEK")
+        raw = self.fetch_many(symbols, "WEEK")
         hist, combined = {}, {}
         for sym, df in raw.items():
             if df.empty:
                 continue
             hist[sym] = df[df.index.date < now.date()]
             combined[sym] = complete_bars(df, now, self.bm)       # yesterday and before + today so far
-        log.info("Rescan data: %d of %d symbols in %.0f s", len(combined), len(scfg.watchlist),
+        log.info("Rescan data: %d of %d symbols in %.0f s", len(combined), len(symbols),
                  _time.monotonic() - t0)
         try:
             liq = self.liquidity(list(hist))
@@ -1738,6 +1783,19 @@ class Bot:
                     last_quote = now_et()
                     self.refresh_quote()
                     self.publish()
+
+
+def public_tradable(client) -> set[str]:
+    """Symbols Public lets you buy and sell (one request for the whole list)."""
+    from public_api_sdk import InstrumentType, InstrumentsRequest
+    res = client.get_all_instruments(InstrumentsRequest(type_filter=[InstrumentType.EQUITY]))
+    out = set()
+    for inst in getattr(res, "instruments", None) or []:
+        if _val(getattr(inst, "trading", "")) == "BUY_AND_SELL":
+            out.add(str(inst.instrument.symbol).upper())
+    if not out:
+        raise RuntimeError("Public returned no tradable stocks")
+    return out
 
 
 def make_client():

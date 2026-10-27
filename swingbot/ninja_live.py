@@ -392,6 +392,9 @@ class NinjaBot(Bot):
     def _cap_shares(self, shares: int, entry_ref: float, side: int = 1) -> int:
         return min(shares, self.cfg.futures_max_contracts)
 
+    def tradable_symbols(self):
+        return None                                     # futures: the contract list is checked separately
+
     def short_check(self, symbol: str, qty: int) -> str | None:
         return None                                     # futures: selling first is an ordinary order
 

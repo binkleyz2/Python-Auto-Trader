@@ -71,7 +71,7 @@ def test_dow_falls_back_to_the_built_in_list(tmp_path, monkeypatch, capsys):
     class Down:
         def get(self, *a, **k):
             raise ConnectionError("blocked")
-    monkeypatch.setattr(iw, "_session", lambda: Down())
+    monkeypatch.setattr(iw.ix, "_session", lambda: Down())
     iw.main(["dow"])
     assert len(read_watchlist(tmp_path / "watchlist_dow30.yaml")) == 30
     assert "built-in" in capsys.readouterr().err

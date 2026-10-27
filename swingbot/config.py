@@ -24,6 +24,8 @@ class Config:
     # --- Watchlist / scanner -------------------------------------------------
     watchlist: list[str] = field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "AMD", "AMZN", "META", "GOOGL", "TSLA"])
     watchlist_file: str = ""              # read the watchlist from this file instead (e.g. watchlist_russell2000.yaml)
+    watchlist_indexes: list[str] = field(default_factory=list)   # also scan these indexes' members, downloaded daily:
+                                          # sp500, dow, nasdaq100, nasdaq, russell2000
     min_price: float = 10.0               # skip stocks under this price
     min_avg_dollar_volume: float = 50e6   # skip thin stocks (avg daily $ volume)
     watch_count: int = 5                  # watch this many top-ranked symbols for entries (1 = only the top pick)
@@ -101,6 +103,10 @@ class Config:
             raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
         if self.email_report and not str(self.email_to).strip():
             raise ValueError("email_report is on but email_to is empty - say where to send the report")
+        from .indexes import INDEXES
+        bad = [i for i in (self.watchlist_indexes or []) if i not in INDEXES]
+        if bad:
+            raise ValueError(f"watchlist_indexes: unknown {', '.join(map(str, bad))} (choose from {', '.join(INDEXES)})")
         if self.direction not in ("long", "short", "both"):
             raise ValueError(f"direction must be 'long', 'short' or 'both', not {self.direction!r}")
         if self.bar_minutes not in (1, 2, 3, 5, 10, 15, 30):

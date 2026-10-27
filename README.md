@@ -138,6 +138,14 @@ watchlist_file: watchlist_russell2000.yaml   # or watchlist_sp100.yaml; "" = use
 
 The file goes in the same folder as `config.yaml`. When `watchlist_file` is set, it replaces the `watchlist:` line. Restart the bot after changing it; the log's first scan line says which list it used ("Scanning 300 symbols from watchlist_russell2000.yaml"). A watchlist file can be in the same `watchlist: [...]` form, or just symbols separated by commas, spaces or new lines; lines starting with `#` are ignored.
 
+**Scanning whole indexes, downloaded each morning:** list them in `config.yaml`:
+
+```yaml
+watchlist_indexes: [sp500, dow, nasdaq100, nasdaq, russell2000]
+```
+
+Choose any of `sp500` (S&P 500), `dow` (Dow Jones Industrial Average), `nasdaq100` (Nasdaq-100), `nasdaq` (Nasdaq Composite) and `russell2000` (Russell 2000). Each morning the bot downloads their current members (iShares IVV and IWM holdings, SPDR DIA holdings, Nasdaq's own lists) and combines them with your `watchlist_file` / `watchlist`, each stock once. Stocks under `min_price` are dropped straight away where the list has prices. Then only stocks your broker can trade are kept: on Alpaca, active and tradable at Alpaca and, with Public's price data, also tradable on Public; on Public, tradable on Public. The log shows each list's size, the total, and what was left out. Lists are saved in `logs/indexes/` and downloaded again once a day; if a download fails, yesterday's copy is used (with a warning). The Dow and Nasdaq-100 are almost entirely inside the S&P 500 and the Nasdaq Composite, so they add little on their own. All five come to about 4,500 stocks, roughly 10 minutes with Public's price data at 8 requests a second: start the bot by about 9:15. A Rescan reuses the day's list.
+
 Ready-made lists and a script to build or refresh them, from the swingbot folder:
 
 | Index | Command | File | Size |

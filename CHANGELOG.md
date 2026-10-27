@@ -1,8 +1,25 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.8.1 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.9.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.9.0 – 2026-10-27
+
+- **Scan whole indexes, downloaded each morning:** new setting `watchlist_indexes`, any of `sp500`, `dow`,
+  `nasdaq100`, `nasdaq` (Composite) and `russell2000`. Their current members are combined with your
+  `watchlist_file` / `watchlist`, each stock once. Lists are saved in `logs/indexes/` and refreshed daily; if
+  a download fails, the last saved copy is used.
+- **Only tradable stocks are scanned** (with or without indexes): Alpaca's active, tradable US stocks and,
+  with Public's price data, stocks tradable on Public; on Public, stocks tradable there. The log lists what
+  was left out. If the broker's list can't be fetched, nothing is dropped and the log says so.
+- Stocks under `min_price` are dropped before downloading their bars where the index list has prices
+  (S&P 500, Nasdaq-100, Russell 2000).
+- The scan log shows the estimated time for long lists. All five indexes: about 4,500 stocks, roughly
+  10 minutes with Public's price data.
+- New: Nasdaq-100 in `tools/index_watchlist.py` too. The download code moved into the bot
+  (`swingbot/indexes.py`); the tool works as before.
+- New setting in `config.example.yaml`: `watchlist_indexes` (default: none).
 
 ## v1.8.1 – 2026-10-27
 

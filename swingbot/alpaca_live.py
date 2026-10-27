@@ -231,6 +231,27 @@ class AlpacaBot(Bot):
             q = -abs(q)
         return q
 
+    @property
+    def tradable_note(self) -> str:
+        return "at Alpaca and on Public's price data" if self.client.public is not None else "at Alpaca"
+
+    def tradable_symbols(self) -> set[str] | None:
+        """Active, tradable US stocks at Alpaca; with Public's price data, also tradable (so quoted) on Public."""
+        from alpaca.trading.enums import AssetClass, AssetStatus
+        from alpaca.trading.requests import GetAssetsRequest
+        assets = self.client.trading.get_all_assets(GetAssetsRequest(status=AssetStatus.ACTIVE,
+                                                                     asset_class=AssetClass.US_EQUITY))
+        ok = {str(a.symbol).upper() for a in assets or [] if getattr(a, "tradable", False)}
+        if not ok:
+            raise RuntimeError("Alpaca returned no tradable stocks")
+        if self.client.public is not None:
+            from .live import public_tradable
+            pub = public_tradable(self.client.public)
+            key = lambda s: s.replace(".", "").replace("/", "").replace("-", "").replace(" ", "")
+            pk = {key(s) for s in pub}
+            ok = {s for s in ok if key(s) in pk}
+        return ok
+
     def short_buying_power(self) -> float:
         a = self.client.trading.get_account()
         if not getattr(a, "shorting_enabled", False):

@@ -22,6 +22,10 @@ price_data: public          # alpaca only: "public" = prices from Public.com (ne
 #            RTX, SBUX, SCHW, SNDK, SO, T, TMO, TMUS, TSLA, TXN,
 #            UBER, UNH, UNP, UPS, USB, V, VZ, WFC, WMT, XOM]
 watchlist_file: watchlist_russell2000.yaml
+# Also scan whole indexes, downloaded fresh each morning and combined with the list above (each stock once;
+# only stocks your broker can trade). Choose any of: sp500, dow, nasdaq100, nasdaq, russell2000.
+# All five: about 4,500 stocks, roughly 10 minutes with Public's price data - start the bot by 9:15.
+watchlist_indexes: []        # e.g. [sp500, dow, nasdaq100, nasdaq, russell2000]
 min_price: 10
 min_avg_dollar_volume: 10000000
 watch_count: 5
