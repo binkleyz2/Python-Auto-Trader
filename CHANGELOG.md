@@ -1,8 +1,18 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.9.1 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.9.2 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.9.2 – 2026-10-27
+
+- **Nasdaq Composite list:** Nasdaq's symbol file answers scripts with a web page now, and its "ftp" address
+  doesn't take web requests at all (60 s wasted). The list now comes from Nasdaq's stock screener, the same
+  site the Nasdaq-100 list already comes from, with the symbol file as the second try. The screener has
+  prices, so Nasdaq stocks under `min_price` are dropped before the scan (fewer downloads each morning).
+- **The day report is emailed once a day.** Starting the bot again after the close (to try settings) made
+  the report and spreadsheet again, which is fine, but also mailed the report each time. Now a second run
+  says it was already sent; `py -m swingbot.report --send` still resends on purpose.
 
 ## v1.9.1 – 2026-10-27
 

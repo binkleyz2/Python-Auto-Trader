@@ -69,7 +69,9 @@ def main(argv=None) -> None:
             elif idx == "nasdaq100":
                 as_of, rows = parse_nasdaq100(raw.decode("utf-8-sig", errors="replace"))
             else:
-                as_of, rows = parse_nasdaq(raw.decode("utf-8", errors="replace"))
+                text = raw.decode("utf-8-sig", errors="replace")
+                as_of, rows = (ix.parse_nasdaq_screener(text) if text.lstrip().startswith("{")
+                               else parse_nasdaq(text))
         except ValueError as e:
             sys.exit(f"{args.file}: {e}")
     else:

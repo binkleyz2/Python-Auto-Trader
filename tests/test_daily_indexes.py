@@ -173,3 +173,49 @@ def test_commented_out_setting_is_not_reported_as_missing(tmp_path):
     (tmp_path / "config.example.yaml").write_text("watchlist_file: a.yaml\nsmtp_port: 587\n", encoding="utf-8")
     (tmp_path / "config.yaml").write_text("#watchlist_file: b.yaml   # not wanted\n", encoding="utf-8")
     assert _new_settings(tmp_path / "config.yaml") == ["smtp_port"]
+
+
+
+def _screener(n=1200):
+    rows = [{"symbol": f"A{chr(65 + i // 26 % 26)}{chr(65 + i % 26)}{chr(65 + i // 676)}", "name": f"Co {i} Common Stock",
+             "lastsale": f"${5 + i % 50}.25"} for i in range(n)]
+    rows += [{"symbol": "ACQW", "name": "Acq Corp - Warrant", "lastsale": "$0.10"},
+             {"symbol": "BRK/B", "name": "odd", "lastsale": "$1"}]
+    return json.dumps({"data": {"asof": "Oct 27, 2026", "table": {"rows": rows}}})
+
+
+def test_nasdaq_comes_from_the_screener_with_prices(tmp_path):
+    as_of, rows = ix.parse_nasdaq_screener(_screener())
+    assert len(rows) == 1200 and as_of == "Oct 27, 2026" and all(r[2] == r[2] for r in rows)
+    assert "ACQW" not in [r[0] for r in rows]
+
+    class S:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, **kw):
+            self.urls.append(url)
+            return SimpleNamespace(ok=True, status_code=200, content=_screener().encode())
+    s = S()
+    import swingbot.indexes as m
+    orig = m._session
+    m._session = lambda: s
+    try:
+        syms = ix.index_symbols("nasdaq", tmp_path, min_price=10, today=date(2026, 10, 28))
+    finally:
+        m._session = orig
+    assert len(s.urls) == 1 and "screener" in s.urls[0]
+    assert 0 < len(syms) < 1200                                   # under $10 dropped before the scan
+
+
+def test_nasdaq_falls_back_to_the_symbol_file(monkeypatch):
+    txt = "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\n" \
+          "AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N\n"
+
+    class S:
+        def get(self, url, **kw):
+            if "screener" in url:
+                return SimpleNamespace(ok=False, status_code=403, content=b"denied")
+            return SimpleNamespace(ok=True, status_code=200, content=txt.encode())
+    monkeypatch.setattr(ix, "_session", lambda: S())
+    assert [r[0] for r in ix.download_nasdaq()[1]] == ["AAPL"]

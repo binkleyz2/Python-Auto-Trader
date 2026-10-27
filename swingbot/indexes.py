@@ -211,27 +211,55 @@ def parse_nasdaq(text: str):
     return as_of, rows
 
 
-NASDAQ_TXT_FTP = "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+NASDAQ_SCREENER = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&exchange=NASDAQ"
+JSON_HEADERS = {"Accept": "application/json, text/plain, */*", "Origin": "https://www.nasdaq.com",
+                "Referer": "https://www.nasdaq.com/"}
+
+
+def parse_nasdaq_screener(text: str):
+    """Nasdaq's stock screener (Nasdaq-listed stocks, with last price). Same filters as the symbol file:
+    no warrants, rights, units, preferreds or notes; plain symbols only."""
+    try:
+        data = json.loads(text)["data"]
+        rows_in = data.get("rows") or (data.get("table") or {}).get("rows")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError("not Nasdaq's stock screener")
+    if not rows_in:
+        raise ValueError("Nasdaq's stock screener returned no rows")
+    rows = []
+    for r in rows_in:
+        sym = str(r.get("symbol") or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]{1,5}", sym) or SKIP_NAME.search(str(r.get("name") or "")):
+            continue
+        price = float(re.sub(r"[^0-9.\-]", "", str(r.get("lastsale") or "")) or "nan")
+        rows.append((sym, float("nan"), price))
+    if len(rows) < 1000:
+        raise ValueError(f"only {len(rows)} stocks in Nasdaq's stock screener")
+    return str(data.get("asof") or "?"), rows
 
 
 def download_nasdaq():
+    """Nasdaq's stock screener first (it has prices, so cheap stocks are dropped before the scan), then
+    Nasdaq's symbol directory file (2026-10-27: that one answered scripts with a web page)."""
     s = _session()
     problems, body = [], b""
-    for url in (NASDAQ_TXT, NASDAQ_TXT_FTP):
+    for url, parse, headers in ((NASDAQ_SCREENER, parse_nasdaq_screener, JSON_HEADERS),
+                                (NASDAQ_TXT, parse_nasdaq, {"Accept": "text/plain,*/*"})):
+        where = url.split("/")[2] + ("/screener" if "screener" in url else "")
         try:
-            r = s.get(url, timeout=60, headers={"Accept": "text/plain,*/*"})
+            r = s.get(url, timeout=45, headers=headers)
         except Exception as e:
-            problems.append(f"{url.split('/')[2]}: {e}")
+            problems.append(f"{where}: {e}")
             continue
         body = r.content or body
         if not r.ok:
-            problems.append(f"{url.split('/')[2]}: HTTP {r.status_code}")
+            problems.append(f"{where}: HTTP {r.status_code}")
             continue
         try:
-            return parse_nasdaq(r.content.decode("utf-8-sig", errors="replace"))
+            return parse(r.content.decode("utf-8-sig", errors="replace"))
         except ValueError as e:
-            problems.append(f"{url.split('/')[2]}: {e}")
-    raise DownloadError("Nasdaq's list of listed securities", NASDAQ_TXT, problems, body)
+            problems.append(f"{where}: {e}")
+    raise DownloadError("Nasdaq's list of listed stocks", NASDAQ_TXT, problems, body)
 
 
 # --------------------------------------------------------------------------- Nasdaq-100
@@ -258,8 +286,7 @@ def parse_nasdaq100(text: str):
 def download_nasdaq100():
     s = _session()
     try:
-        r = s.get(NASDAQ100_API, timeout=60, headers={"Accept": "application/json", "Origin": "https://www.nasdaq.com",
-                                                      "Referer": "https://www.nasdaq.com/"})
+        r = s.get(NASDAQ100_API, timeout=60, headers=JSON_HEADERS)
         if r.ok:
             return parse_nasdaq100(r.content.decode("utf-8", errors="replace"))
         problems, body = [f"HTTP {r.status_code}"], r.content

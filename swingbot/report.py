@@ -366,7 +366,13 @@ def end_of_day(bot, cfg, logs: Path) -> Path | None:
             return None
         log.info("Day report saved: %s", rep["path"])
         if cfg.email_report:
+            sent = logs / f"{day}-report.sent"
+            if sent.exists():                                 # e.g. the bot was started again after the close
+                log.info("Day report was already emailed today (%s) - not sent again. To resend: "
+                         "py -m swingbot.report --send", sent.read_text(encoding="utf-8").strip())
+                return rep["path"]
             send(cfg, rep, [p for p in (jpg, xlsx) if p is not None and p.exists()])
+            sent.write_text(f"{now_et():%H:%M} to {cfg.email_to}", encoding="utf-8")
             log.info("Day report emailed to %s", cfg.email_to)
         return rep["path"]
     except Exception as e:

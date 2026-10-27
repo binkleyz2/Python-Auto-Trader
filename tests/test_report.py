@@ -144,3 +144,16 @@ def test_closed_trades_keep_what_the_chart_needs(tmp_path, monkeypatch):
     for t in st["closed"]:
         assert t["init_stop"] and t["stop_steps"] and t["line"]["pts"]
         assert {"side", "final_stop", "target"} <= set(t)
+
+
+
+def test_report_is_emailed_once_a_day(tmp_path, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    bot, cfg, day = _day(tmp_path, monkeypatch)
+    monkeypatch.setenv("SMTP_USER", "u")
+    monkeypatch.setenv("SMTP_PASSWORD", "p")
+    FakeSMTP.sent = []
+    monkeypatch.setattr(report.smtplib, "SMTP", FakeSMTP)
+    report.end_of_day(bot, cfg, tmp_path / "logs")
+    report.end_of_day(bot, cfg, tmp_path / "logs")              # started again after the close
+    assert len(FakeSMTP.sent) == 1 and "already emailed today" in caplog.text
