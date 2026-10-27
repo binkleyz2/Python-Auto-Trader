@@ -1,8 +1,28 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.7.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.8.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.8.0 – 2026-10-27
+
+- **End-of-day report by email** (optional, `email_report: true` plus `email_to:`). After each session:
+  - the day's results: account at start and end, change in $ and %, total since the first day, the bot's
+    trade P&L, trades used;
+  - every trade: side, type, shares, entry and exit time and price, initial and final stop, how it ended,
+    P&L and R;
+  - a chart per traded stock: the day's bars, the trend line behind each trade, entry and exit, the
+    initial stop and the stop as it moved (and the target, if any);
+  - the dashboard picture and the results spreadsheet attached; errors from the day's log listed, and
+    warnings in the subject when something needs your attention (a position left open, errors).
+- Sent through Gmail by default (`smtp_host`, `smtp_port` for another provider). The login goes in `.env`:
+  `SMTP_USER` and `SMTP_PASSWORD` (Gmail: an app password). See `.env.example`.
+- The report is always saved as `logs/<date>-report.html` with `logs/<date>-chart-<SYMBOL>.png`, even
+  without mail. `py -m swingbot.report [DATE] [--send]` makes or resends one by hand.
+- A mail problem is logged as a warning; it never affects trading.
+- Trades now also record their initial and final stop, the stop's path and the trend line (for the charts).
+- New requirement: `matplotlib`. Run `py -m pip install --user -r requirements.txt` once.
+- New settings in `config.example.yaml`: `email_report`, `email_to`, `smtp_host`, `smtp_port`.
 
 ## v1.7.0 – 2026-10-26
 

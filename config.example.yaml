@@ -77,6 +77,14 @@ dashboard_key:            # set your own key to bookmark the address; blank = ne
 dashboard_jpg: true        # also save a picture of the end-of-day page: logs/<date>-dashboard.jpg
 results_spreadsheet: true  # daily/weekly results in logs/results-<account>.xlsx, updated after each session
 
+# End-of-day report by email: results, every trade and a chart per traded symbol.
+# The mail login goes in .env (SMTP_USER, SMTP_PASSWORD), never here. With Gmail, SMTP_PASSWORD is an
+# "app password" (Google account > Security > 2-Step Verification > App passwords).
+email_report: false
+email_to:                   # e.g. you@example.com (several: separate with commas)
+smtp_host: smtp.gmail.com
+smtp_port: 587
+
 # Backtest
 starting_equity: 25000
 slippage_pct: 0.02

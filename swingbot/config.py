@@ -80,6 +80,11 @@ class Config:
     dashboard_jpg: bool = True            # also save logs/<date>-dashboard.jpg at the end of the day
     dashboard_jpg_browser: str = ""       # Edge/Chrome to draw it with (blank = find it automatically)
     results_spreadsheet: bool = True      # keep logs/results-<account>.xlsx up to date at the end of each day
+    email_report: bool = False            # mail the day's report (trades + charts) after the session
+    email_to: str = ""                    # where to send it (several: separate with commas)
+    email_from: str = ""                  # sender shown on the mail (blank = SMTP_USER from .env)
+    smtp_host: str = "smtp.gmail.com"     # mail server (Gmail by default; login in .env: SMTP_USER, SMTP_PASSWORD)
+    smtp_port: int = 587                  # 587 = STARTTLS, 465 = SSL
 
     # --- Backtest only -------------------------------------------------------------
     starting_equity: float = 25_000.0
@@ -94,6 +99,8 @@ class Config:
             raise ValueError(f"min_stop_pct must be 0 to 20, not {self.min_stop_pct!r}")
         if not 1 <= int(self.scan_workers) <= 32:
             raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
+        if self.email_report and not str(self.email_to).strip():
+            raise ValueError("email_report is on but email_to is empty - say where to send the report")
         if self.direction not in ("long", "short", "both"):
             raise ValueError(f"direction must be 'long', 'short' or 'both', not {self.direction!r}")
         if self.bar_minutes not in (1, 2, 3, 5, 10, 15, 30):

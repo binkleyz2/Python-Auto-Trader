@@ -425,6 +425,17 @@ class Bot:
         self._resync = True                            # next check redraws; entries resume from the next bar
         return self.watch != old
 
+    def _line_for_report(self, d: pd.DataFrame, sig) -> dict | None:
+        """The trend line behind a signal, as two (time, price) points on today's chart (for the report)."""
+        try:
+            L, t = sig.line, sig.bar
+            today = np.flatnonzero(d.index.date == d.index[t].date())
+            a = max(L.i1, int(today[0])) if len(today) else L.i1
+            return dict(kind=L.kind, pts=[[d.index[a].isoformat(), float(L.value_at(a))],
+                                          [d.index[t].isoformat(), float(L.value_at(t))]])
+        except Exception:
+            return None
+
     def _is_short(self) -> bool:
         return bool(self.pos) and self.pos.get("side", 1) < 0
 
@@ -511,6 +522,8 @@ class Bot:
         for c in self.closed:
             c["entry_x"] *= k
             c["exit_x"] *= k
+            if c.get("stop_steps"):
+                c["stop_steps"] = [[x * k, y] for x, y in c["stop_steps"]]
 
     # ------------------------------------------------- saved day (restarts)
     # The bot writes its day to logs/<date>-state.json after every check, so a restart during the
@@ -977,7 +990,8 @@ class Bot:
                     return o
         return None
 
-    def enter(self, entry_ref: float, stop: float, kind: str, signal_ts=None, side: int = 1) -> None:
+    def enter(self, entry_ref: float, stop: float, kind: str, signal_ts=None, side: int = 1,
+              line: dict | None = None) -> None:
         cfg = self.cfg
         if side < 0:
             why = self._why_no_short(0)
@@ -1017,7 +1031,8 @@ class Bot:
         ex = self._x(signal_ts) + 1 if signal_ts is not None else self._x(now_et())
         pos = dict(kind=kind, side=side, entry=entry_ref, init_stop=float(stop_d), stop=float(stop_d),
                    target=float(tgt_d) if tgt_d is not None else None, shares=shares, signal_ts=signal_ts,
-                   entry_x=ex, entry_clock=now_et().strftime("%H:%M"), stop_steps=[[ex, float(stop_d)]])
+                   entry_x=ex, entry_clock=now_et().strftime("%H:%M"), stop_steps=[[ex, float(stop_d)]],
+                   line=line)
 
         if not self.live:
             self.trades_today += 1
@@ -1263,7 +1278,9 @@ class Bot:
                                                  ("end of day", "kill switch")) else min(390 / self.bm - 1, self._x(now_et()))
         self.closed.append(dict(symbol=self.symbol, kind=p["kind"], side=side, shares=p["shares"], entry=p["entry"], exit=price, pnl=pnl,
                                 reason=reason, entry_time=p["entry_clock"], exit_time=now_et().strftime("%H:%M"),
-                                entry_x=p["entry_x"], exit_x=max(exit_x, p["entry_x"])))
+                                entry_x=p["entry_x"], exit_x=max(exit_x, p["entry_x"]),
+                                init_stop=p["init_stop"], final_stop=p["stop"], target=p.get("target"),
+                                stop_steps=[list(x) for x in p.get("stop_steps") or []], line=p.get("line")))
         self.pos = None
         self.save_state()
 
@@ -1416,7 +1433,8 @@ class Bot:
             self.last_price = self.last_close
             if sym in self.views:
                 self.view = self.views[sym]
-            self.enter(sig.ref_price, sig.stop, sig.kind, signal_ts=newest, side=sig.side)
+            self.enter(sig.ref_price, sig.stop, sig.kind, signal_ts=newest, side=sig.side,
+                       line=self._line_for_report(d, sig))
             if self.pos:
                 return
         if self.symbol != before and not self.pos and before:

@@ -209,6 +209,8 @@ def main(argv=None) -> None:
                     from .screenshot import save_jpg
                     save_jpg(snap, cfg.dashboard_jpg_browser)
                 dash.stop()
+            from .report import end_of_day
+            end_of_day(bot, cfg, workdir / "logs")
     finally:
         client.close()
 
