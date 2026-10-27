@@ -209,7 +209,7 @@ class Bot:
         if self.cfg.watchlist_indexes and scfg.watchlist is self.cfg.watchlist:     # stocks, not futures
             from .indexes import daily_watchlist
             syms, counts = daily_watchlist(list(self.cfg.watchlist_indexes), syms, self.workdir / "logs" / "indexes",
-                                           self.cfg.min_price)
+                                           self.cfg.min_price, fallback_dir=self.workdir)
             log.info("Watchlist today: %s = %d different stocks",
                      " + ".join(f"{k} {v}" for k, v in counts.items()), len(syms))
         if scfg.watchlist is self.cfg.watchlist:

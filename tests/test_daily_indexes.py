@@ -81,7 +81,7 @@ class Assets:
 
 def test_only_stocks_tradable_at_alpaca_and_on_public_are_scanned(tmp_path, monkeypatch, caplog):
     caplog.set_level("INFO")
-    monkeypatch.setattr(ix, "members", lambda index, warn=None: ("today", LISTS[index]))
+    monkeypatch.setattr(ix, "members", lambda index, **kw: ("today", LISTS[index]))
     monkeypatch.setattr(live, "now_et", lambda: datetime(2026, 10, 27, 9, 0, tzinfo=ZoneInfo("America/New_York")))
     trading = Assets({"AAPL": True, "MSFT": True, "BRK.B": True, "GS": False, "LIVN": True, "BUSE": True,
                       "TINY": True, "ZZZZ": True, "NVDA": True})
@@ -114,3 +114,62 @@ def test_without_indexes_the_watchlist_is_unchanged_apart_from_tradability(tmp_p
     bot = live.Bot(SimpleNamespace(), Config(watchlist=["AAPL", "MSFT"]), live=False, workdir=tmp_path)
     assert bot.scan_symbols(bot.cfg) == ["AAPL", "MSFT"]        # tradable list unavailable: nothing dropped
     assert not (tmp_path / "logs" / "indexes").exists()
+
+
+# ---------------------------------------------------------------- 2026-10-27, first real run
+def test_nasdaq_file_with_a_byte_order_mark_is_read():
+    text = "\ufeffSymbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\r\n" \
+           "AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N\r\nFile Creation Time: 1027202617:30|||||||\r\n"
+    assert [r[0] for r in ix.parse_nasdaq(text)[1]] == ["AAPL"]
+    with pytest.raises(ValueError, match="starts: '<html>"):
+        ix.parse_nasdaq("<html><body>blocked</body></html>")
+
+
+def test_dow_file_with_more_than_one_table_keeps_the_holdings_only():
+    import io
+    import pandas as pd
+    head = pd.DataFrame([["Holdings:", "As of 27-Oct-2026", None], [None] * 3, ["Name", "Ticker", "Weight"]])
+    body = pd.DataFrame([[f"Co {t}", t, 3.3] for t in ix.DOW30] + [["AAPL again", "AAPL", 1.0]])
+    tail = pd.DataFrame([[None] * 3, ["Other fund", "Ticker", "Weight"]] + [[f"X{i}", f"Z{chr(65 + i % 26)}{i % 9}"[:3], 1]
+                                                                            for i in range(80)])
+    buf = io.BytesIO()
+    pd.concat([head, body, tail]).to_excel(buf, header=False, index=False)
+    as_of, rows = ix.parse_dia(buf.getvalue())
+    assert sorted(r[0] for r in rows) == sorted(ix.DOW30)
+
+
+def test_failed_download_falls_back_to_a_list_made_with_the_tool(tmp_path, caplog):
+    (tmp_path / "watchlist_nasdaq.yaml").write_text("watchlist: [AAPL, MSFT, TINY]\n", encoding="utf-8")
+
+    def down(index):
+        raise ix.DownloadError("x", "u", ["not Nasdaq's symbol directory file"], b"<html>")
+    syms = ix.index_symbols("nasdaq", tmp_path / "logs" / "indexes", download=down, fallback_dir=tmp_path)
+    assert syms == ["AAPL", "MSFT", "TINY"] and "using watchlist_nasdaq.yaml" in caplog.text
+    assert (tmp_path / "logs" / "indexes" / "nasdaq-download-debug.txt").read_bytes() == b"<html>"
+
+
+def test_alpaca_asset_list_is_read_raw_so_a_new_exchange_cant_break_it(tmp_path, monkeypatch):
+    from swingbot.alpaca_live import AlpacaBot, AlpacaClients
+    raw = [{"symbol": "AAPL", "tradable": True, "exchange": "NASDAQ"},
+           {"symbol": "TXCO", "tradable": True, "exchange": "TXSE"},        # alpaca-py doesn't know TXSE yet
+           {"symbol": "DEAD", "tradable": False, "exchange": "NYSE"}]
+    calls = []
+
+    class Trading:
+        def get(self, path, data=None):
+            calls.append((path, data))
+            return raw if path == "/assets" else {"symbol": "TXCO", "shortable": True, "easy_to_borrow": True}
+
+        def get_account(self):
+            return SimpleNamespace(shorting_enabled=True)
+    bot = AlpacaBot(AlpacaClients(Trading(), None, "iex", True), Config(broker="alpaca"), live=False, workdir=tmp_path)
+    assert bot.tradable_symbols() == {"AAPL", "TXCO"}
+    assert calls[0] == ("/assets", {"status": "active", "asset_class": "us_equity"})
+    assert bot.short_check("TXCO", 10) is None
+
+
+def test_commented_out_setting_is_not_reported_as_missing(tmp_path):
+    from swingbot.__main__ import _new_settings
+    (tmp_path / "config.example.yaml").write_text("watchlist_file: a.yaml\nsmtp_port: 587\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("#watchlist_file: b.yaml   # not wanted\n", encoding="utf-8")
+    assert _new_settings(tmp_path / "config.yaml") == ["smtp_port"]

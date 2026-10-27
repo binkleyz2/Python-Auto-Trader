@@ -33,8 +33,7 @@ from swingbot import indexes as ix  # noqa: E402
 from swingbot.indexes import (DOW30, ISHARES, NAME, DownloadError, parse_dia, parse_ishares,  # noqa: E402,F401
                               parse_nasdaq, parse_nasdaq100)
 
-OUT = {"sp500": "watchlist_sp500.yaml", "dow": "watchlist_dow30.yaml", "nasdaq": "watchlist_nasdaq.yaml",
-       "nasdaq100": "watchlist_nasdaq100.yaml", "russell2000": "watchlist_russell2000.yaml"}
+OUT = ix.OUT
 EXT = {"dow": ".xlsx", "nasdaq": ".txt", "nasdaq100": ".json"}
 
 

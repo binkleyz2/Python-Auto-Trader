@@ -1,8 +1,24 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.9.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.9.1 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.9.1 – 2026-10-27
+
+Fixes from the first run with `watchlist_indexes`:
+
+- **Tradable-stock check failed at Alpaca:** alpaca-py rejected Alpaca's whole asset list because some stocks
+  are now on an exchange it doesn't know yet (TXSE, the Texas Stock Exchange), so nothing was filtered. The
+  list is now read directly, without that check. The short check reads its stock the same way.
+- **Nasdaq Composite list:** "not Nasdaq's symbol directory file". The file is now read even with a
+  byte-order mark at the start, Nasdaq's second address is tried, and what came back is saved in
+  `logs/indexes/` for a look if it still fails. If there's no saved copy yet, a `watchlist_nasdaq.yaml`
+  made with the index tool is used instead (the same for each index).
+- **Dow list:** "found 118 stocks, expected 30". Empty spreadsheet cells were read as a stock called "NAN"
+  and the reading carried on past the holdings table. It now stops at the end of the table and skips
+  repeats. (The built-in Dow list was used meanwhile, so nothing was missed.)
+- The startup note about settings missing from `config.yaml` no longer lists ones you commented out.
 
 ## v1.9.0 – 2026-10-27
 

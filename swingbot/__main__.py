@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -45,8 +46,10 @@ def _new_settings(path: Path) -> list[str]:
     try:
         import yaml
         ex = yaml.safe_load((path.parent / EXAMPLE).read_text(encoding="utf-8-sig")) or {}
-        mine = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
-        return [k for k in ex if k not in mine]
+        text = path.read_text(encoding="utf-8-sig")
+        mine = yaml.safe_load(text) or {}
+        # a setting you commented out (#watchlist_file: ...) was left out on purpose
+        return [k for k in ex if k not in mine and not re.search(rf"^\s*#\s*{re.escape(k)}\s*:", text, re.M)]
     except Exception:
         return []
 

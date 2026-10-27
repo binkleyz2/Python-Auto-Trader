@@ -237,11 +237,8 @@ class AlpacaBot(Bot):
 
     def tradable_symbols(self) -> set[str] | None:
         """Active, tradable US stocks at Alpaca; with Public's price data, also tradable (so quoted) on Public."""
-        from alpaca.trading.enums import AssetClass, AssetStatus
-        from alpaca.trading.requests import GetAssetsRequest
-        assets = self.client.trading.get_all_assets(GetAssetsRequest(status=AssetStatus.ACTIVE,
-                                                                     asset_class=AssetClass.US_EQUITY))
-        ok = {str(a.symbol).upper() for a in assets or [] if getattr(a, "tradable", False)}
+        assets = self._raw_assets()
+        ok = {str(_field(a, "symbol")).upper() for a in assets or [] if _field(a, "tradable")}
         if not ok:
             raise RuntimeError("Alpaca returned no tradable stocks")
         if self.client.public is not None:
@@ -262,12 +259,27 @@ class AlpacaBot(Bot):
         a = self.client.trading.get_account()
         if not getattr(a, "shorting_enabled", False):
             return "shorting isn't enabled on this Alpaca account (needs margin and $2,000 equity)"
-        asset = self.client.trading.get_asset(symbol)
-        if not getattr(asset, "shortable", False):
+        asset = self._raw_asset(symbol)
+        if not _field(asset, "shortable"):
             return "not shortable at Alpaca"
-        if not getattr(asset, "easy_to_borrow", False):
+        if not _field(asset, "easy_to_borrow"):
             return "hard to borrow"
         return None
+
+    # Alpaca's asset list is read raw: alpaca-py rejects the whole list when one stock is on an exchange it
+    # doesn't know yet (2026-10-27: 'TXSE', the Texas Stock Exchange).
+    def _raw_assets(self):
+        t = self.client.trading
+        if hasattr(t, "get") and callable(getattr(t, "get")):
+            return t.get("/assets", {"status": "active", "asset_class": "us_equity"})
+        from alpaca.trading.requests import GetAssetsRequest
+        return t.get_all_assets(GetAssetsRequest())
+
+    def _raw_asset(self, symbol: str):
+        t = self.client.trading
+        if hasattr(t, "get") and callable(getattr(t, "get")):
+            return t.get(f"/assets/{symbol}")
+        return t.get_asset(symbol)
 
     # ---------------------------------------------------------------- orders
     def _orders(self) -> list:
@@ -391,6 +403,11 @@ class AlpacaBot(Bot):
                 q = float(o.filled_qty)
                 qty, value = qty + q, value + q * float(o.filled_avg_price)
         return round(value / qty, 4) if qty else None
+
+
+def _field(obj, name: str):
+    """A field of an Alpaca object or of its raw JSON."""
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
 
 
 def _is_not_found(e) -> bool:

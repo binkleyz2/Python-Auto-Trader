@@ -138,11 +138,16 @@ def parse_dia(data: bytes):
             as_of = cells[-1].replace("As of", "").strip()
     cols = [str(v).strip() for v in raw.iloc[hdr]]
     df = raw.iloc[hdr + 1:].set_axis(cols, axis=1)
-    rows = []
+    rows, seen = [], set()
     for _, r in df.iterrows():
         tick = str(r.get("Ticker", "")).strip().upper()
-        if not re.fullmatch(r"[A-Z]{1,5}([ .][A-Z])?", tick):
-            continue                                   # cash line, blanks, footer text
+        if tick in ("", "NAN", "NONE", "NAT"):
+            if rows:
+                break                                  # the holdings table ends at the first blank row
+            continue
+        if not re.fullmatch(r"[A-Z]{1,5}([ .][A-Z])?", tick) or tick in seen:
+            continue                                   # cash line, blanks, footer text, repeats
+        seen.add(tick)
         try:
             w = float(r.get("Weight", "nan"))
         except (TypeError, ValueError):
@@ -153,14 +158,24 @@ def parse_dia(data: bytes):
     return as_of, rows
 
 
-def download_dow(warn=None):
+def download_dow(warn=None, debug: Path | None = None):
+    body = b""
     try:
         r = _session().get(DIA_XLSX, timeout=60)
         r.raise_for_status()
-        return parse_dia(r.content)
+        body = r.content
+        return parse_dia(body)
     except Exception as e:
+        note = ""
+        if debug is not None and body:
+            try:
+                debug.mkdir(parents=True, exist_ok=True)
+                (debug / "dow-download.xlsx").write_bytes(body)
+                note = f" (what came back is saved in {debug / 'dow-download.xlsx'})"
+            except Exception:
+                pass
         (warn or log.warning)(f"SPDR DIA holdings not available ({e}) - using the built-in Dow list as of "
-                              f"{DOW30_AS_OF}.")
+                              f"{DOW30_AS_OF}{note}.")
         return f"{DOW30_AS_OF} (built-in)", [(t, float("nan"), float("nan")) for t in DOW30]
 
 
@@ -171,9 +186,11 @@ BAD_STATUS = set("DEQGHJK")                           # deficient, delinquent, b
 
 
 def parse_nasdaq(text: str):
-    lines = [l for l in text.splitlines() if l.strip()]
-    if not lines or not lines[0].startswith("Symbol|"):
-        raise ValueError("not Nasdaq's symbol directory file")
+    lines = [l for l in text.lstrip("\ufeff \r\n\t").splitlines() if l.strip()]
+    if not lines or not lines[0].lstrip("\ufeff ").startswith("Symbol|"):
+        start = (lines[0][:60] if lines else "an empty file").strip()
+        raise ValueError(f"not Nasdaq's symbol directory file (it starts: {start!r})")
+    lines[0] = lines[0].lstrip("\ufeff ")
     header = lines[0].split("|")
     as_of = "?"
     rows = []
@@ -194,15 +211,26 @@ def parse_nasdaq(text: str):
     return as_of, rows
 
 
+NASDAQ_TXT_FTP = "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+
+
 def download_nasdaq():
     s = _session()
-    try:
-        r = s.get(NASDAQ_TXT, timeout=60)
-        if r.ok:
-            return parse_nasdaq(r.content.decode("utf-8", errors="replace"))
-        problems, body = [f"HTTP {r.status_code}"], r.content
-    except Exception as e:
-        problems, body = [str(e)], b""
+    problems, body = [], b""
+    for url in (NASDAQ_TXT, NASDAQ_TXT_FTP):
+        try:
+            r = s.get(url, timeout=60, headers={"Accept": "text/plain,*/*"})
+        except Exception as e:
+            problems.append(f"{url.split('/')[2]}: {e}")
+            continue
+        body = r.content or body
+        if not r.ok:
+            problems.append(f"{url.split('/')[2]}: HTTP {r.status_code}")
+            continue
+        try:
+            return parse_nasdaq(r.content.decode("utf-8-sig", errors="replace"))
+        except ValueError as e:
+            problems.append(f"{url.split('/')[2]}: {e}")
     raise DownloadError("Nasdaq's list of listed securities", NASDAQ_TXT, problems, body)
 
 
@@ -242,12 +270,12 @@ def download_nasdaq100():
     raise DownloadError("Nasdaq's Nasdaq-100 list", NASDAQ100_API, problems, body)
 
 
-def members(index: str, warn=None):
+def members(index: str, warn=None, debug: Path | None = None):
     """(as_of, [(ticker with class as 'BRK B', weight, price), ...]) downloaded now."""
     if index in ISHARES:
         return download_ishares(index)
     if index == "dow":
-        return download_dow(warn)
+        return download_dow(warn, debug)
     if index == "nasdaq":
         return download_nasdaq()
     if index == "nasdaq100":
@@ -265,11 +293,16 @@ def _cache_read(path: Path) -> tuple[str, list[str]] | None:
         return None
 
 
+OUT = {"sp500": "watchlist_sp500.yaml", "dow": "watchlist_dow30.yaml", "nasdaq": "watchlist_nasdaq.yaml",
+       "nasdaq100": "watchlist_nasdaq100.yaml", "russell2000": "watchlist_russell2000.yaml"}
+
+
 def index_symbols(index: str, folder: Path, min_price: float = 0.0, today: date | None = None,
-                  download=None) -> list[str]:
+                  download=None, fallback_dir: Path | None = None) -> list[str]:
     """Members of ``index`` as broker symbols ('BRK.B'), from today's download or the saved copy.
     Stocks priced under ``min_price`` are left out where the list has prices (S&P 500, Russell 2000,
-    Nasdaq-100); the scan's own min_price filter catches the rest."""
+    Nasdaq-100); the scan's own min_price filter catches the rest. If a download fails with no saved
+    copy, a list made by tools/index_watchlist.py (watchlist_<index>.yaml in ``fallback_dir``) is used."""
     today = today or date.today()
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{index}.txt"
@@ -277,12 +310,26 @@ def index_symbols(index: str, folder: Path, min_price: float = 0.0, today: date 
     if cached and cached[0] == str(today):
         return cached[1]
     try:
-        as_of, rows = (download or members)(index)
+        as_of, rows = download(index) if download else members(index, debug=folder)
     except Exception as e:
+        body = getattr(e, "body", b"")
+        if body:
+            try:
+                (folder / f"{index}-download-debug.txt").write_bytes(body[:200_000])
+                e = f"{e}; what came back is saved in {folder / (index + '-download-debug.txt')}"
+            except Exception:
+                pass
         if cached:
             log.warning("%s: today's list couldn't be downloaded (%s) - using the copy from %s", NAME[index], e,
                         cached[0])
             return cached[1]
+        made = (fallback_dir / OUT[index]) if fallback_dir is not None else None
+        if made is not None and made.exists():
+            from .config import read_watchlist
+            syms = read_watchlist(made)
+            log.warning("%s: list couldn't be downloaded (%s) - using %s (%d stocks)", NAME[index], e, made.name,
+                        len(syms))
+            return syms
         log.error("%s: list couldn't be downloaded (%s) and there is no saved copy - left out today",
                   NAME[index], e)
         return []
@@ -293,11 +340,11 @@ def index_symbols(index: str, folder: Path, min_price: float = 0.0, today: date 
 
 
 def daily_watchlist(indexes: list[str], extra: list[str], folder: Path, min_price: float = 0.0,
-                    download=None) -> tuple[list[str], dict[str, int]]:
+                    download=None, fallback_dir: Path | None = None) -> tuple[list[str], dict[str, int]]:
     """Each index's members plus your own list, each stock once (in that order). Also returns counts."""
     out, counts = {}, {}
     for idx in indexes:
-        syms = index_symbols(idx, folder, min_price, download=download)
+        syms = index_symbols(idx, folder, min_price, download=download, fallback_dir=fallback_dir)
         counts[NAME[idx]] = len(syms)
         for s in syms:
             out.setdefault(s.upper(), None)
