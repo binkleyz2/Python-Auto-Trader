@@ -206,8 +206,14 @@ const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(
 
 // ------------------------------------------------------------------ header & tiles
 function renderTop(s) {
-  $("sym").textContent = s.symbol || "No pick";
-  $("pick").textContent = s.pick_reason || "";
+  // the header follows the chart picker; the position tiles stay on the bot's own trade
+  const chartSym = s.chart_symbol || s.symbol, own = !s.symbol || chartSym === s.symbol;
+  const wrow = (s.watch || []).find(w => w.symbol === chartSym);
+  const srow = (s.scan || []).find(r => r.symbol === chartSym);
+  $("sym").textContent = chartSym || "No pick";
+  $("pick").textContent = own ? (s.pick_reason || "")
+    : [srow ? `${srow.setup} - ${srow.detail}` : (wrow ? wrow.setup : ""),
+       `bot's pick: ${s.symbol}${s.pos ? " (in trade)" : ""}`].filter(Boolean).join(" · ");
   $("ver").textContent = s.version ? "v" + s.version : "";
   const m = $("mode");
   m.textContent = s.mode || "–";
@@ -219,7 +225,7 @@ function renderTop(s) {
   if (p) {
     const side = p.side || 1;
     setText("t-pos", `${side < 0 ? "Short " : ""}${p.shares} ${s.unit || "sh"}`);
-    setText("t-pos-s", `${p.kind} · in at ${fmt(p.entry)} · ${p.entry_time}`);
+    setText("t-pos-s", `${own ? "" : s.symbol + " "}${p.kind} · in at ${fmt(p.entry)} · ${p.entry_time}`);
     const unreal = p.unreal, r = p.r;
     setText("t-open", signed(unreal), tone(unreal));
     setText("t-open-s", r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R  (1R = ${money(p.risk_dollars)})`);
@@ -234,8 +240,13 @@ function renderTop(s) {
     setText("t-open", "–"); setText("t-open-s", "");
     setText("t-stop", "–"); setText("t-stop-s", "");
   }
-  setText("t-last", fmt(s.last));
-  setText("t-last-s", s.stale ? `no trades on the feed since ${s.stale.since}` : (s.last_time ? "as of " + s.last_time + " ET" : ""));
+  if (own) {
+    setText("t-last", fmt(s.last));
+    setText("t-last-s", s.stale ? `no trades on the feed since ${s.stale.since}` : (s.last_time ? "as of " + s.last_time + " ET" : ""));
+  } else {
+    setText("t-last", fmt(wrow ? wrow.last : null));
+    setText("t-last-s", `${chartSym} · last bar's close`);
+  }
   setText("t-day", signed(s.day_pnl), tone(s.day_pnl));
   setText("t-day-s", s.mode === "LIVE" ? "realized + open" : "paper: realized + open");
   setText("t-trades", `${s.trades_used ?? 0} of ${s.max_trades ?? "–"}`);

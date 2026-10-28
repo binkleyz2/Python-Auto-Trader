@@ -263,11 +263,3 @@ python -m pytest -q
 ```
 
 The tests cover swing detection, a no-lookahead check (a signal at a given bar is the same whether or not later bars exist), backtest rules (one stock a day, flat by 15:50, trade limits), a full dry-run session against a fake account that fails if any order is sent, and live order handling against a fake broker: settled-cash limits, the stop-only bracket, trailing without ever leaving the position unprotected, and never touching shares or orders you already had.
-
-## License
-
-Copyright (C) 2026 Zachary Elwyn
-
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [LICENSE](LICENSE) file for details.

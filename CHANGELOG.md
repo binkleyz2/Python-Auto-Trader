@@ -1,8 +1,16 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.9.2 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.9.3 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.9.3 – 2026-10-28
+
+- **Dashboard: the name at the top follows the Chart picker.** Choosing another watched stock changed the
+  chart but left the top-ranked stock's name, setup and last price above it. Now the header shows the
+  stock on the chart with its morning setup and "bot's pick: ..." next to it, and Last price is that
+  stock's latest bar close. The Position, Open P&L and Stop tiles still show the bot's own trade, labelled
+  with its symbol when another stock is on the chart.
 
 ## v1.9.2 – 2026-10-27
 
