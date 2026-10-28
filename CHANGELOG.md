@@ -1,8 +1,14 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.9.3 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.9.4 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.9.4 – 2026-10-28
+
+- **Dashboard: the Position, Open P&L and Stop tiles follow the Chart picker too.** On another stock's chart
+  they show that stock: "Flat" with "no trade in TMUS", or "the bot is in a trade in VMRK" when the bot's
+  trade is in a different stock. Day P&L and Trades today stay for the whole day.
 
 ## v1.9.3 – 2026-10-28
 

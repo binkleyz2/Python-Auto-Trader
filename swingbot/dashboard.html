@@ -221,11 +221,11 @@ function renderTop(s) {
   $("state").textContent = s.state || "";
   $("updated").textContent = s.updated ? "Updated " + s.updated + " ET" : "";
 
-  const p = s.pos;
+  const p = own ? s.pos : null;                  // the tiles follow the chart too
   if (p) {
     const side = p.side || 1;
     setText("t-pos", `${side < 0 ? "Short " : ""}${p.shares} ${s.unit || "sh"}`);
-    setText("t-pos-s", `${own ? "" : s.symbol + " "}${p.kind} · in at ${fmt(p.entry)} · ${p.entry_time}`);
+    setText("t-pos-s", `${p.kind} · in at ${fmt(p.entry)} · ${p.entry_time}`);
     const unreal = p.unreal, r = p.r;
     setText("t-open", signed(unreal), tone(unreal));
     setText("t-open-s", r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R  (1R = ${money(p.risk_dollars)})`);
@@ -236,7 +236,9 @@ function renderTop(s) {
     if ((p.stop - p.init_stop) * side > 0) sub += locked >= 0 ? ` · locks ${signed(locked)}` : ` · moved ${p.stop_steps.length - 1}×`;
     setText("t-stop-s", sub);
   } else {
-    setText("t-pos", "Flat"); setText("t-pos-s", s.symbol ? "watching for a setup" : "");
+    setText("t-pos", "Flat");
+    setText("t-pos-s", !own ? (s.pos ? `the bot is in a trade in ${s.symbol}` : `no trade in ${chartSym}`)
+                            : (s.symbol ? "watching for a setup" : ""));
     setText("t-open", "–"); setText("t-open-s", "");
     setText("t-stop", "–"); setText("t-stop-s", "");
   }
