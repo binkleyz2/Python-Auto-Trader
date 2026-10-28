@@ -1,5 +1,10 @@
 # Swingbot
 
+For an explanation of the overall strategy, there are good resources available online.  Here are a few:
+
+https://www.theforexguy.com/forex-swing-trading-strategies/
+https://www.ig.com/en/trading-strategies/swing-highs--what-they-are-and-how-they-work-241108
+
 A day-trading bot for Public.com or Alpaca (stocks) or NinjaTrader (futures) that you run on your own computer. Each morning it scans your watchlist, picks one stock, and trades it on 5-minute bars: long by default, or also short (`direction`). It uses swing-point trend lines and is always out of the market by the close.
 
 **You are responsible for every order it sends.** It starts in dry-run mode, which places no orders. Run the backtest and at least a few weeks of dry runs before you use `--live`.
