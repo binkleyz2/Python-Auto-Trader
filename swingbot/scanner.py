@@ -32,7 +32,9 @@ def avg_dollar_volume(df: pd.DataFrame) -> float:
     return float(dv.mean()) if len(dv) else 0.0
 
 
-def score_symbol(symbol: str, df: pd.DataFrame, cfg: Config, adv: float | None = None) -> ScanResult:
+def score_symbol(symbol: str, df: pd.DataFrame, cfg: Config, adv: float | None = None, pre=None) -> ScanResult:
+    """``pre`` = (frame with indicators, swing lows, swing highs, mirrored frame or None) for this same window,
+    when the caller has them already (the backtest); otherwise they're worked out here."""
     if len(df) < 3 * cfg.swing_n + cfg.atr_period:
         return ScanResult(symbol, 0.0, "none", float("nan"), "not enough history")
     last_close = float(df["close"].iat[-1])
@@ -48,8 +50,12 @@ def score_symbol(symbol: str, df: pd.DataFrame, cfg: Config, adv: float | None =
     above = not (len(dc) >= 3 and last_close < dc.tail(5).mean())
     trend_note = "above 5-day avg" if above else "below 5-day avg"
 
-    d = add_indicators(df, cfg)
-    is_low, is_high = find_swings(d, cfg.swing_n)
+    if pre is not None:
+        d, is_low, is_high, md = pre
+    else:
+        d = add_indicators(df, cfg)
+        is_low, is_high = find_swings(d, cfg.swing_n)
+        md = None
     t = len(d) - 1
     best = ScanResult(symbol, 0.0, "none", last_close, f"no valid line ({trend_note})")
     if cfg.direction in ("long", "both"):
@@ -57,7 +63,7 @@ def score_symbol(symbol: str, df: pd.DataFrame, cfg: Config, adv: float | None =
             if r[0] > best.score:
                 best = ScanResult(symbol, r[0], r[1], last_close, r[2], 1)
     if cfg.direction in ("short", "both"):
-        md = mirror(d)
+        md = md if md is not None else mirror(d)
         for r in _side_scores(md, t, cfg, is_high, is_low, -last_close, not above, -1):
             if r[0] > best.score:
                 best = ScanResult(symbol, r[0], r[1], last_close, r[2], -1)
@@ -92,12 +98,14 @@ def _side_scores(d, t, cfg, is_low, is_high, last_close, trend_ok, side):
     return out
 
 
-def scan(history: dict[str, pd.DataFrame], cfg: Config, dollar_volume: dict | None = None) -> list[ScanResult]:
+def scan(history: dict[str, pd.DataFrame], cfg: Config, dollar_volume: dict | None = None,
+         pre: dict | None = None) -> list[ScanResult]:
     """Rank all symbols; best first. Symbols with score 0 are not tradable today.
     ``dollar_volume`` optionally supplies each symbol's average daily dollar volume from a
     better source than the bars (e.g. when the bars come from a single exchange)."""
-    dv = dollar_volume or {}
-    results = [score_symbol(sym, df, cfg, dv.get(sym)) for sym, df in history.items() if df is not None and len(df)]
+    dv, pre = dollar_volume or {}, pre or {}
+    results = [score_symbol(sym, df, cfg, dv.get(sym), pre.get(sym)) for sym, df in history.items()
+               if df is not None and len(df)]
     return sorted(results, key=lambda r: (-r.score, r.symbol))
 
 

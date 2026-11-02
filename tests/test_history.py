@@ -25,7 +25,7 @@ def test_daily_for_30_days_weekly_before(tmp_path):
     days = _days()
     out = h.build_workbook(days, "alpaca-paper", tmp_path / "r.xlsx", today=date(2026, 10, 23))
     wb = openpyxl.load_workbook(out)
-    assert wb.sheetnames == ["Summary", "Last 30 days", "Weekly (older)", "All days"]
+    assert wb.sheetnames == ["Summary", "Last 30 days", "Weekly (older)", "All days", "By setup", "Trades"]
     D, W, A = wb["Last 30 days"], wb["Weekly (older)"], wb["All days"]
     daily = [r[0].value.date() for r in D.iter_rows(min_row=5) if r[0].value]
     assert daily[0] == date(2026, 9, 24) and daily[-1] == date(2026, 10, 23)        # 30 calendar days
@@ -86,3 +86,23 @@ def test_open_in_excel_is_a_warning(tmp_path, monkeypatch, caplog):
     h.write_days(tmp_path / h.CSV_NAME, _days(date(2026, 10, 1), date(2026, 10, 2)))
     assert h.update(tmp_path, Config(broker="alpaca")) is None
     assert "open in Excel" in caplog.text
+
+
+def test_by_setup_sheet_from_trades_csv(tmp_path):
+    import csv
+    rows = [["time", "mode", "symbol", "kind", "event", "shares", "entry", "initial_stop", "stop", "target", "exit", "pnl"],
+            ["2026-10-27T10:20:17-04:00", "live", "CELC", "short bounce", "entry", 376, 66.24, 67.4, 67.4, "", "", 0],
+            ["2026-10-27T10:55:15-04:00", "live", "CELC", "short bounce", "stop", 376, 66.24, 67.4, 67.4, "", 67.54, -488.8],
+            ["2026-10-27T14:25:16-04:00", "live", "NAMS", "breakout", "stop", 1216, 20.53, 20.43, 20.43, "", 20.45, -97.28],
+            ["2026-10-28T11:00:00-04:00", "paper", "XYZ", "bounce", "stop", 10, 10, 9, 9, "", 9, -10]]   # dry run: out
+    with (tmp_path / "trades.csv").open("w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerows(rows)
+    trades = h.read_trades(tmp_path / "trades.csv")
+    assert [(t["setup"], t["r"]) for t in trades] == [("short bounce", -1.121), ("long breakout", -0.8)]
+    out = h.build_workbook(_days(), "alpaca-paper", tmp_path / "r.xlsx", today=date(2026, 10, 23), trades=trades)
+    wb = openpyxl.load_workbook(out)
+    assert wb.sheetnames[-2:] == ["By setup", "Trades"]
+    bs = wb["By setup"]
+    assert [bs.cell(row=r, column=1).value for r in range(5, 10)] == list(h.SETUPS) + ["All"]
+    assert bs["B5"].value.startswith("=COUNTIF(Trades!$C$2:$C$3")              # formulas over the Trades sheet
+    assert wb["Trades"]["C2"].value == "short bounce" and wb["Trades"].max_row == 3

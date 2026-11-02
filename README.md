@@ -66,6 +66,7 @@ To get the secret key, go to public.com → Settings → Security → API. To fi
 ```bash
 python -m swingbot demo                 # backtest on fake data, only to confirm the code runs
 python -m swingbot fetch --data data    # save the last week of 5-min bars into data/ (run once a day)
+python -m swingbot backtest --days 120  # backtest your settings on 120 days of Alpaca history (see below)
 python -m swingbot backtest --data data # backtest on the bars you've collected
 python -m swingbot scan                 # show this morning's ranking
 python -m swingbot run                  # dry run for today's session: real data, simulated fills, NO orders
@@ -100,7 +101,7 @@ Nothing on the page can place, change or cancel orders. It is reachable from thi
 
 ## Settings on the dashboard
 
-**Results spreadsheet:** after each session the bot updates `logs/results-<account>.xlsx` (for example `results-alpaca-paper.xlsx`). It has four tabs: **Summary** (starting and latest account value, total change in $ and %, trades, win rate, best and worst day, and a chart of the account value), **Last 30 days** (one row per trading day: start and end value, change in $ and %, the bot's trade P&L, trades, wins and losses, and the total change since the first day), **Weekly (older)** (the same, one row per Monday-to-Friday week, for days more than 30 days old) and **All days**. Only days with orders count (live, or a paper or demo account), not dry runs. Each day is also added to `logs/daily-results.csv`, which is the permanent record the spreadsheet is built from; days from before this feature are filled in from the `logs/<date>-state.json` files. If the spreadsheet is open in Excel at the end of the day it can't be replaced; the log says so and the next run catches up, or run `py -m swingbot.history` to rebuild it any time. `results_spreadsheet: false` turns it off.
+**Results spreadsheet:** after each session the bot updates `logs/results-<account>.xlsx` (for example `results-alpaca-paper.xlsx`). It has six tabs: **Summary** (starting and latest account value, total change in $ and %, trades, win rate, best and worst day, and a chart of the account value), **Last 30 days** (one row per trading day: start and end value, change in $ and %, the bot's trade P&L, trades, wins and losses, and the total change since the first day), **Weekly (older)** (the same, one row per Monday-to-Friday week, for days more than 30 days old), **All days**, **By setup** (long bounce, long breakout, short bounce and short breakdown: trades, wins, win rate, net and average P&L, average R) and **Trades** (every finished trade with its R). Only days with orders count (live, or a paper or demo account), not dry runs. Each day is also added to `logs/daily-results.csv`, which is the permanent record the spreadsheet is built from; days from before this feature are filled in from the `logs/<date>-state.json` files. If the spreadsheet is open in Excel at the end of the day it can't be replaced; the log says so and the next run catches up, or run `py -m swingbot.history` to rebuild it any time. `results_spreadsheet: false` turns it off.
 
 **End-of-day report by email:** with `email_report: true` and `email_to:` set in `config.yaml`, the bot mails you a report after each session. It has the day's results (account at start and end, change in $ and %, total since the first day, the bot's trade P&L), a table of every trade (side, type, shares, entry and exit time and price, initial and final stop, how it ended, P&L and R), and a chart for each traded stock showing that day's bars, the trend line behind the trade, the entry and exit, the initial stop and the stop as it moved. The dashboard picture and the results spreadsheet are attached, and any errors from the day's log are listed. The mail goes through Gmail unless you set `smtp_host` and `smtp_port`; the login goes in `.env` as `SMTP_USER` and `SMTP_PASSWORD` (for Gmail, an app password: Google account → Security → 2-Step Verification → App passwords). The report is also saved as `logs/<date>-report.html` with the charts next to it, mail or not. `py -m swingbot.report 2026-10-27 --send` makes or resends one for an earlier day (within about a week, since the charts need that day's bars). If the mail can't be sent, the log says why and the bot carries on.
 
@@ -225,14 +226,30 @@ Same strategy (swing-low trend lines, bounce and breakout entries, trailing stop
 
 Run several weeks in the demo account before considering `ninja_env: live`. In the first demo session, check the log and dashboard against your NinjaTrader chart to confirm the bars line up (the bot assumes a bar's time marks its start).
 
-## Getting backtest data
+## Backtesting on months of history
 
-Public's API serves recent 5-minute bars (about a week at a time), not years of history. You have two options:
+The quickest way: Alpaca's free data plan includes full-market 5-minute history, years back (anything more than 15 minutes old). Paper keys in `.env` are enough; nothing is traded.
 
-1. Run `fetch` every evening. This builds your own archive in `data/`, which grows a week at a time.
-2. Buy or download 5-minute history elsewhere and save one `SYMBOL.csv` per stock in `data/`. Each file needs these columns: `timestamp,open,high,low,close,volume`. Timestamps should be UTC or carry an offset, and mark the bar's start time.
+```
+py -m swingbot backtest --days 120
+```
 
-Treat any backtest under a few hundred trades as noise.
+- **What it tests:** your `config.yaml` exactly as the live bot uses it. Each day it ranks the stocks on the days before (the morning scan), watches the best `watch_count`, takes the first signal among them, one position at a time, up to `max_trades_per_day` and the daily loss limit, and sells at 15:50. Entries fill at the next bar's open plus `slippage_pct`; inside a bar the stop is assumed to fill before the target.
+- **Which stocks:** `--universe sp500` (the default), or any of `sp500, nasdaq100, dow, russell2000, nasdaq` joined with commas, or `watchlist` for your own list and `watchlist_indexes`. At most 800 stocks (`--max-symbols`): months of bars for thousands of stocks need a lot of memory.
+- **Time:** the first run downloads the bars (a few minutes for 500 stocks) into `data/`; later runs only fetch new days. The test itself takes about a minute or two per run for 500 stocks and 3 months.
+- **Results** (in `backtests/`): `report.txt` with the totals (win rate, average R, profit factor, return, largest drawdown) and the same split **by setup** (long/short bounce and breakout/breakdown), **by entry hour**, **by exit** and **by month**; every trade in `trades.csv`; the equity curve in `equity.csv`.
+
+**Comparing settings side by side:**
+
+```
+py -m swingbot backtest --days 120 --try swing_n=4,5 --try breakeven_at_r=1,1.5
+```
+
+Every combination (here 4, up to 16) runs on the same data and prints one line each: trades, win rate, average R, profit factor, net, return and drawdown. It's saved as `backtests/compare.csv`, with each run's full report and trades next to it. Any setting in `config.yaml` can be tried this way.
+
+**Reading the results:** average R (the average trade's result in multiples of its initial risk) is the number to watch. Above 0 means the winners pay for the losers; a few hundred trades are needed before the difference between two settings means much. A setting that only wins in one month, or only with one setup, is more likely luck than an edge. And a backtest is the best case: real fills (CELC filled 28 cents worse than its signal price on 2026-10-27) and spreads cost more than `slippage_pct`.
+
+Other data: `py -m swingbot backtest --data data` still tests on one `SYMBOL.csv` per stock in `data/` (columns `timestamp,open,high,low,close,volume`; timestamps in UTC or with an offset, marking the bar's start), for example built with `fetch` each evening.
 
 ## Running it daily
 

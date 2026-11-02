@@ -137,7 +137,34 @@ def _weeks(days: list[Day]) -> list[dict]:
     return out
 
 
-def build_workbook(days: list[Day], account: str, out: Path, today: date | None = None) -> Path:
+def read_trades(path: Path) -> list[dict]:
+    """Finished trades from trades.csv (orders sent: live or a paper/demo account - not dry runs)."""
+    if not path or not path.exists():
+        return []
+    out = []
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        for r in csv.DictReader(fh):
+            if r.get("event") in (None, "", "entry") or r.get("mode") != "live" or not r.get("exit"):
+                continue
+            try:
+                entry, init, shares, pnl = float(r["entry"]), float(r["initial_stop"]), int(float(r["shares"])), \
+                    float(r["pnl"])
+            except (KeyError, ValueError):
+                continue
+            kind = r.get("kind") or ""
+            risk = abs(entry - init) * shares
+            out.append(dict(when=r["time"][:16].replace("T", " "), symbol=r.get("symbol", ""),
+                            setup=kind if kind.startswith("short") else f"long {kind}", shares=shares, entry=entry,
+                            initial_stop=init, exit=float(r["exit"]), exit_by=r.get("event", ""), pnl=pnl,
+                            r=round(pnl / risk, 3) if risk else 0.0))
+    return out
+
+
+SETUPS = ("long bounce", "long breakout", "short bounce", "short breakdown")
+
+
+def build_workbook(days: list[Day], account: str, out: Path, today: date | None = None,
+                   trades: list[dict] | None = None) -> Path:
     from openpyxl import Workbook
     from openpyxl.chart import LineChart, Reference
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -166,6 +193,7 @@ def build_workbook(days: list[Day], account: str, out: Path, today: date | None 
     S.title = "Summary"
     A, D, W = wb.create_sheet("All days"), wb.create_sheet("Last 30 days"), wb.create_sheet("Weekly (older)")
     wb.move_sheet(A, offset=2)                                   # Summary, Last 30 days, Weekly, All days
+    BS, TR = wb.create_sheet("By setup"), wb.create_sheet("Trades")
 
     START = "Summary!$B$5"                                       # first day's starting value
 
@@ -275,7 +303,46 @@ def build_workbook(days: list[Day], account: str, out: Path, today: date | None 
         ch.series[0].smooth = False
         S.add_chart(ch, "A20")
 
-    for ws in (S, D, W, A):
+    # ---- Trades and By setup: which of the four setups earn their keep
+    trades = trades or []
+    TR_COLS = ["When (ET)", "Symbol", "Setup", "Shares", "Entry", "Initial stop", "Exit", "Exit by", "P&L", "R"]
+    header(TR, 1, TR_COLS, [17, 9, 16, 8, 10, 11, 10, 9, 12, 8])
+    for i, t in enumerate(trades, 2):
+        vals = [t["when"], t["symbol"], t["setup"], t["shares"], t["entry"], t["initial_stop"], t["exit"],
+                t["exit_by"], t["pnl"], t["r"]]
+        fmts = [None, None, None, INT, "0.00", "0.00", "0.00", None, USD, '+0.00"R";[Red]-0.00"R";0.00"R"']
+        for col, (v, fm) in enumerate(zip(vals, fmts), 1):
+            c = TR.cell(row=i, column=col, value=v)
+            c.font = inp if col in (4, 5, 6, 7, 9, 10) else base
+            if fm:
+                c.number_format = fm
+    tl = max(2, len(trades) + 1)
+    rngT = lambda col: f"Trades!${col}$2:${col}${tl}"
+    BS["A1"], BS["A1"].font = "Results by setup (every trade with orders, all days)", title
+    BS["A2"], BS["A2"].font = ("R = profit or loss divided by the trade's initial risk (entry to initial stop x shares). "
+                               "Average R above 0 means the setup has paid for its losers."), muted
+    header(BS, 4, ["Setup", "Trades", "Wins", "Win rate", "Net P&L", "Average P&L", "Average R"],
+           [18, 9, 8, 10, 13, 13, 11])
+    for i, name in enumerate(SETUPS, 5):
+        BS.cell(row=i, column=1, value=name).font = base
+        formulas = [f'=COUNTIF({rngT("C")},A{i})', f'=COUNTIFS({rngT("C")},A{i},{rngT("I")},">0")',
+                    f'=IF(B{i}=0,"",C{i}/B{i})', f'=SUMIF({rngT("C")},A{i},{rngT("I")})', f'=IF(B{i}=0,"",E{i}/B{i})',
+                    f'=IF(B{i}=0,"",SUMIF({rngT("C")},A{i},{rngT("J")})/B{i})']
+        for col, (f, fm) in enumerate(zip(formulas, [INT, INT, "0%", USD, USD, '+0.00"R";[Red]-0.00"R";0.00"R"']), 2):
+            c = BS.cell(row=i, column=col, value=f)
+            c.number_format = fm
+            c.font = base
+    i = 5 + len(SETUPS)
+    BS.cell(row=i, column=1, value="All").font = bold
+    for col, f, fm in ((2, f"=SUM(B5:B{i - 1})", INT), (3, f"=SUM(C5:C{i - 1})", INT), (4, f'=IF(B{i}=0,"",C{i}/B{i})', "0%"),
+                       (5, f"=SUM(E5:E{i - 1})", USD), (6, f'=IF(B{i}=0,"",E{i}/B{i})', USD),
+                       (7, f'=IF(B{i}=0,"",SUM({rngT("J")})/B{i})', '+0.00"R";[Red]-0.00"R";0.00"R"')):
+        c = BS.cell(row=i, column=col, value=f)
+        c.number_format, c.font = fm, bold
+    if not trades:
+        BS.cell(row=i + 2, column=1, value="No finished trades recorded yet.").font = muted
+
+    for ws in (S, D, W, A, BS, TR):
         for row in ws.iter_rows():
             for c in row:
                 if c.font is None or c.font.name != F:
@@ -302,7 +369,7 @@ def update(logs: Path, cfg, today_day: Day | None = None) -> Path | None:
         if not any(d.account == acct for d in days):
             log.info("Results spreadsheet: no trading days with orders recorded yet for %s.", acct)
             return None
-        out = build_workbook(days, acct, logs / f"results-{acct}.xlsx")
+        out = build_workbook(days, acct, logs / f"results-{acct}.xlsx", trades=read_trades(logs.parent / "trades.csv"))
         log.info("Results spreadsheet updated: %s", out)
         return out
     except PermissionError:

@@ -11,3 +11,6 @@ __pycache__/
 .pytest_cache/
 # your own settings (start from config.example.yaml)
 config.yaml
+# backtests: downloaded history and results (rebuilt any time)
+data/
+backtests/

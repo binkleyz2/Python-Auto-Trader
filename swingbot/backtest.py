@@ -1,15 +1,21 @@
-"""Day-by-day backtest: morning scan -> one symbol -> 5-minute trading -> flat at close."""
+"""Backtest that trades the way the live bot does.
+
+Each day: rank the watchlist on the days before (the morning scan), watch the best ``watch_count``,
+and on every bar take the first signal among them (best-ranked first), one position at a time, until
+``max_trades_per_day`` or the daily loss limit. Entries fill at the next bar's open plus slippage;
+stops and targets fill inside a bar (stop first, the cautious assumption); everything is sold at 15:50.
+"""
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import time
 
 import numpy as np
 import pandas as pd
 
 from .config import Config
-from .scanner import pick
+from .scanner import scan
 from .strategy import (add_indicators, better_stop, find_swings, mirror, sided_breakeven_stop, sided_trailing_stop,
                        signals_at, target_for)
 
@@ -36,6 +42,7 @@ class Trade:
     pnl: float
     r_multiple: float
     side: str = "long"   # "long" or "short"
+    rank: int = 1        # the stock's place in that morning's scan (1 = best)
 
 
 def position_size(equity: float, entry: float, stop: float, cfg: Config, side: int = 1) -> int:
@@ -47,22 +54,24 @@ def position_size(equity: float, entry: float, stop: float, cfg: Config, side: i
     return max(0, math.floor(min(by_risk, by_cap)))
 
 
-def simulate_day(sym: str, d: pd.DataFrame, is_low, is_high, day_idx: np.ndarray,
-                 equity: float, cfg: Config, md: pd.DataFrame | None = None) -> list[Trade]:
-    """Trade one symbol for one session. ``day_idx`` = positional indices of today's bars in ``d``.
-    ``md`` = mirror(d), for shorts (made here if not given)."""
-    if md is None and cfg.direction != "long":
-        md = mirror(d)
+# --------------------------------------------------------------------------------- one session
+def simulate_watch(sessions: list[tuple], equity: float, cfg: Config) -> list[Trade]:
+    """Trade one session over several watched symbols, best-ranked first.
+    ``sessions`` = [(symbol, d, is_low, is_high, md, day_idx), ...] where ``day_idx`` are the positions of
+    today's bars in ``d`` (d has the earlier days too, so lines and swings can reach back)."""
     first_entry, last_entry, flatten = _t(cfg.first_entry_time), _t(cfg.last_entry_time), _t(cfg.flatten_time)
     slip = cfg.slippage_pct / 100
     trades: list[Trade] = []
-    pos = None            # dict while in a trade
-    pending = None        # Signal waiting for next bar's open
-    day_pnl = 0.0
     loss_limit = equity * cfg.daily_loss_limit_pct / 100
+    state = dict(pos=None, pending=None, day_pnl=0.0)
+    at = {s[0]: {s[1].index[i]: int(i) for i in s[5]} for s in sessions}       # symbol -> {timestamp: position}
+    info = {s[0]: s for s in sessions}
+    rank = {s[0]: k + 1 for k, s in enumerate(sessions)}
+    timeline = sorted(set().union(*[set(m) for m in at.values()])) if at else []
 
-    def close_pos(t, price, reason):
-        nonlocal pos, day_pnl
+    def close_pos(sym, t, price, reason):
+        pos = state["pos"]
+        d = info[sym][1]
         side = pos["side"]
         fill = price * (1 - slip * side)                 # slippage always costs: sell lower, buy back higher
         pnl = (fill - pos["entry"]) * pos["shares"] * side
@@ -74,103 +83,158 @@ def simulate_day(sym: str, d: pd.DataFrame, is_low, is_high, day_idx: np.ndarray
             entry_time=pos["time"], entry=round(pos["entry"], 4), stop=round(pos["init_stop"], 4),
             final_stop=round(pos["stop"], 4),
             target=round(pos["target"], 4) if pos["target"] is not None else float("nan"),
-            shares=pos["shares"],
-            exit_time=d.index[t].strftime("%H:%M"), exit=round(fill, 4), reason=reason,
+            shares=pos["shares"], exit_time=d.index[t].strftime("%H:%M"), exit=round(fill, 4), reason=reason,
             pnl=round(pnl, 2), r_multiple=round(pnl / risk, 2) if risk else 0.0,
-            side="long" if side > 0 else "short",
-        ))
-        day_pnl += pnl
-        pos = None
+            side="long" if side > 0 else "short", rank=rank[sym]))
+        state["day_pnl"] += pnl
+        state["pos"] = None
 
-    for t in day_idx:
-        bar = d.iloc[t]
-        bt = d.index[t].time()
-
-        # 1) open of bar t: flatten, or fill a pending entry
-        if pos is not None and bt >= flatten:
-            close_pos(t, bar["open"], "flatten")
-        if pending is not None and pos is None and bt < flatten:
-            side = pending.side
-            entry = bar["open"] * (1 + slip * side)
-            if side * (entry - pending.stop) > 0:        # the open hasn't already gone through the stop
-                shares = position_size(equity + day_pnl, entry, pending.stop, cfg, side)
-                if shares > 0:
-                    pos = dict(kind=pending.kind, side=side, entry=entry, stop=pending.stop, init_stop=pending.stop,
-                               target=target_for(entry, pending.stop, cfg) if cfg.use_target else None,
-                               shares=shares, from_bar=pending.bar, time=d.index[t].strftime("%H:%M"))
-        pending = None
-
-        # 2) intrabar: stop first (conservative), then target
-        if pos is not None:
+    for ts in timeline:
+        bt = ts.time()
+        pos = state["pos"]
+        # 1) the open of this bar: sell at 15:50, or fill a waiting entry
+        if pos is not None and bt >= flatten and ts in at[pos["sym"]]:
+            t = at[pos["sym"]][ts]
+            close_pos(pos["sym"], t, info[pos["sym"]][1]["open"].iat[t], "flatten")
+        pend = state["pending"]
+        if pend is not None and state["pos"] is None and ts in at[pend[0]]:
+            sym, sig = pend
+            state["pending"] = None
+            if bt < flatten:
+                d = info[sym][1]
+                t = at[sym][ts]
+                side = sig.side
+                entry = d["open"].iat[t] * (1 + slip * side)
+                if side * (entry - sig.stop) > 0:        # the open hasn't already gone through the stop
+                    shares = position_size(equity + state["day_pnl"], entry, sig.stop, cfg, side)
+                    if shares > 0:
+                        state["pos"] = dict(sym=sym, kind=sig.kind, side=side, entry=entry, stop=sig.stop,
+                                            init_stop=sig.stop, shares=shares, from_bar=sig.bar,
+                                            target=target_for(entry, sig.stop, cfg) if cfg.use_target else None,
+                                            time=d.index[t].strftime("%H:%M"))
+        # 2) inside this bar: stop first (cautious), then target
+        pos = state["pos"]
+        if pos is not None and ts in at[pos["sym"]]:
+            sym = pos["sym"]
+            d, lo, hi, md = info[sym][1], info[sym][2], info[sym][3], info[sym][4]
+            t = at[sym][ts]
+            bar = d.iloc[t]
             if pos["side"] > 0:
                 if bar["low"] <= pos["stop"]:
-                    close_pos(t, min(bar["open"], pos["stop"]), "stop")
+                    close_pos(sym, t, min(bar["open"], pos["stop"]), "stop")
                 elif pos["target"] is not None and bar["high"] >= pos["target"]:
-                    close_pos(t, max(bar["open"], pos["target"]), "target")
+                    close_pos(sym, t, max(bar["open"], pos["target"]), "target")
             else:
                 if bar["high"] >= pos["stop"]:
-                    close_pos(t, max(bar["open"], pos["stop"]), "stop")
+                    close_pos(sym, t, max(bar["open"], pos["stop"]), "stop")
                 elif pos["target"] is not None and bar["low"] <= pos["target"]:
-                    close_pos(t, min(bar["open"], pos["target"]), "target")
+                    close_pos(sym, t, min(bar["open"], pos["target"]), "target")
+            # 3) the close of this bar: move the stop (takes effect from the next bar)
+            pos = state["pos"]
+            if pos is not None and cfg.trail_stop:
+                pos["stop"] = sided_trailing_stop(d, md, t, cfg, lo, hi, pos["from_bar"], pos["stop"], pos["side"])
+            if pos is not None:
+                pos["stop"] = sided_breakeven_stop(pos["entry"], pos["init_stop"], float(bar["close"]), pos["stop"],
+                                                   cfg, pos["side"])
+        # 4) the close of this bar: a new signal on any watched symbol, best-ranked first
+        if (state["pos"] is None and state["pending"] is None and first_entry <= bt <= last_entry
+                and len(trades) < cfg.max_trades_per_day and state["day_pnl"] > -loss_limit):
+            for sym, d, lo, hi, md, _ in sessions:
+                if ts not in at[sym]:
+                    continue
+                sig = signals_at(d, md, at[sym][ts], cfg, lo, hi)
+                if sig:
+                    state["pending"] = (sym, sig)
+                    break
 
-        # 3) close of bar t: move the trailing stop (takes effect from the next bar)
-        if pos is not None and cfg.trail_stop:
-            pos["stop"] = sided_trailing_stop(d, md, t, cfg, is_low, is_high, pos["from_bar"], pos["stop"], pos["side"])
-        if pos is not None:
-            pos["stop"] = sided_breakeven_stop(pos["entry"], pos["init_stop"], float(bar["close"]), pos["stop"], cfg,
-                                               pos["side"])
-
-        # 4) close of bar t: look for a new signal
-        if (pos is None and first_entry <= bt <= last_entry
-                and len(trades) < cfg.max_trades_per_day and day_pnl > -loss_limit):
-            pending = signals_at(d, md, t, cfg, is_low, is_high)
-
-    if pos is not None:                       # safety net: last bar of the day
-        close_pos(day_idx[-1], d.iloc[day_idx[-1]]["close"], "flatten")
+    pos = state["pos"]
+    if pos is not None:                                   # safety net: the last bar of the day
+        t = max(at[pos["sym"]].values())
+        close_pos(pos["sym"], t, info[pos["sym"]][1]["close"].iat[t], "flatten")
     return trades
 
 
-def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10,
-        warmup_days: int = 3) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
-    """Returns (trades, end-of-day equity curve, daily pick log)."""
-    prepared = {}
+def simulate_day(sym: str, d: pd.DataFrame, is_low, is_high, day_idx: np.ndarray,
+                 equity: float, cfg: Config, md: pd.DataFrame | None = None) -> list[Trade]:
+    """One symbol for one session (the watch-list engine with a single symbol)."""
+    if md is None and cfg.direction != "long":
+        md = mirror(d)
+    return simulate_watch([(sym, d, is_low, is_high, md, day_idx)], equity, cfg)
+
+
+# --------------------------------------------------------------------------------- many days
+SCAN_KEYS = ("swing_n", "direction", "min_price", "min_avg_dollar_volume", "enable_bounce", "enable_breakout",
+             "touch_tolerance_atr", "break_tolerance_atr", "atr_period", "max_line_age_bars", "min_anchor_gap_bars")
+
+
+def prepare(history: dict[str, pd.DataFrame], cfg: Config) -> dict:
+    """Indicators and swing points for each symbol's whole history (no look-ahead: a swing at bar i is
+    only used once bar i + swing_n has closed, as in live trading)."""
+    out = {}
     for sym, df in history.items():
+        if df is None or not len(df):
+            continue
         d = add_indicators(df, cfg)
         lo, hi = find_swings(d, cfg.swing_n)
-        prepared[sym] = (d, lo, hi, np.array(d.index.date), mirror(d) if cfg.direction != "long" else None)
+        out[sym] = (d, lo, hi, np.array(d.index.date), mirror(d) if cfg.direction != "long" else None)
+    return out
 
-    all_days = sorted(set().union(*[set(p[3]) for p in prepared.values()]))
+
+def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, warmup_days: int = 3,
+        progress=None, scan_cache: dict | None = None, prepared: dict | None = None
+        ) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
+    """Returns (trades, end-of-day equity curve, daily scan log). ``scan_cache`` lets several runs with
+    settings that don't change the scan (stops, targets, trades per day...) share the daily rankings."""
+    prepared = prepared if prepared is not None else prepare(history, cfg)
+    all_days = sorted(set().union(*[set(p[3]) for p in prepared.values()])) if prepared else []
     equity = cfg.starting_equity
     trades: list[Trade] = []
-    curve = {}
-    picks = []
+    curve, picks = {}, []
+    key = tuple(getattr(cfg, k) for k in SCAN_KEYS)
 
     for k, day in enumerate(all_days):
         if k < warmup_days:
             continue
         window_start = all_days[max(0, k - lookback_days)]
-        prior = {}
-        for sym, (d, _, _, dates, _) in prepared.items():
-            mask = (dates >= window_start) & (dates < day)
-            if mask.any() and (dates == day).any():
-                prior[sym] = history[sym][mask]
-        choice = pick(prior, cfg)
-        picks.append({"date": str(day), "symbol": choice.symbol if choice else None,
-                      "setup": choice.setup if choice else "none",
-                      "detail": choice.detail if choice else ""})
-        if choice:
-            d, lo, hi, dates, md = prepared[choice.symbol]
+        ck = (key, day)
+        if scan_cache is not None and ck in scan_cache:
+            ranked = scan_cache[ck]
+        else:
+            prior, pre = {}, {}
+            for sym, (d, lo, hi, dates, md) in prepared.items():
+                a, b = np.searchsorted(dates, window_start), np.searchsorted(dates, day)
+                if b > a and b < len(dates) and dates[b] == day:
+                    # the same window the live scan sees; its indicators and swings come from the whole
+                    # history, which is identical up to the window's end (a swing needs swing_n bars after
+                    # it, so the last swing_n bars never count - see strategy._build_line)
+                    w = d.iloc[a:b]
+                    prior[sym] = w
+                    pre[sym] = (w, lo[a:b], hi[a:b], md.iloc[a:b] if md is not None else None)
+            ranked = [(r.symbol, r.score, r.setup, r.detail) for r in scan(prior, cfg, pre=pre) if r.score > 0]
+            if scan_cache is not None:
+                scan_cache[ck] = ranked
+        watched = ranked[:max(1, int(cfg.watch_count))]
+        picks.append({"date": str(day), "symbol": watched[0][0] if watched else None,
+                      "setup": watched[0][2] if watched else "none", "detail": watched[0][3] if watched else "",
+                      "watched": [w[0] for w in watched]})
+        sessions = []
+        for sym, *_ in watched:
+            d, lo, hi, dates, md = prepared[sym]
             day_idx = np.flatnonzero(dates == day)
-            day_trades = simulate_day(choice.symbol, d, lo, hi, day_idx, equity, cfg, md)
-            for tr in day_trades:
-                equity += tr.pnl
-            trades.extend(day_trades)
+            if len(day_idx):
+                sessions.append((sym, d, lo, hi, md, day_idx))
+        for tr in simulate_watch(sessions, equity, cfg):
+            equity += tr.pnl
+            trades.append(tr)
         curve[pd.Timestamp(day)] = equity
+        if progress:
+            progress(k + 1, len(all_days))
 
-    tdf = pd.DataFrame([asdict(t) for t in trades])
-    return tdf, pd.Series(curve, name="equity"), picks
+    tdf = pd.DataFrame([asdict(t) for t in trades], columns=[f.name for f in fields(Trade)])
+    return tdf, pd.Series(curve, name="equity", dtype=float), picks
 
 
+# --------------------------------------------------------------------------------- results
 def summarize(trades: pd.DataFrame, curve: pd.Series, cfg: Config) -> dict:
     if trades.empty:
         return {"trades": 0, "note": "no trades triggered"}
@@ -199,3 +263,36 @@ def summarize(trades: pd.DataFrame, curve: pd.Series, cfg: Config) -> dict:
         out[f"{kind}_win_rate_pct"] = round(100 * (g.pnl > 0).mean(), 1)
         out[f"{kind}_avg_r"] = round(g.r_multiple.mean(), 2)
     return out
+
+
+def _table(g) -> dict:
+    return dict(trades=int(len(g)), win_pct=round(100 * (g.pnl > 0).mean(), 1), avg_r=round(g.r_multiple.mean(), 2),
+                net=round(g.pnl.sum(), 2))
+
+
+def breakdown(trades: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Results by setup (side + kind), by entry hour, by exit reason and by month."""
+    if trades.empty:
+        return {}
+    t = trades.copy()
+    t["setup"] = [k if k.startswith("short") else f"long {k}" for k in t.kind]
+    t["hour"] = [f"{h:02d}:00" for h in t.entry_time.str[:2].astype(int)]
+    t["month"] = t.date.str[:7]
+    out = {}
+    for name, col in (("By setup", "setup"), ("By entry hour", "hour"), ("By exit", "reason"), ("By month", "month")):
+        rows = {key: _table(g) for key, g in t.groupby(col)}
+        out[name] = pd.DataFrame.from_dict(rows, orient="index")
+    return out
+
+
+def report_text(trades: pd.DataFrame, curve: pd.Series, cfg: Config, title: str = "") -> str:
+    s = summarize(trades, curve, cfg)
+    lines = [title] if title else []
+    if s.get("trades", 0) == 0:
+        return "\n".join(lines + ["No trades."])
+    lines += [f"Days {s['days']}  Trades {s['trades']}  Win rate {s['win_rate_pct']}%  Avg R {s['avg_r']:+.2f}  "
+              f"Profit factor {s['profit_factor']}  Net ${s['net_pnl']:,.2f} ({s['return_pct']:+.2f}%)  "
+              f"Max drawdown {s['max_drawdown_pct']:.2f}%"]
+    for name, df in breakdown(trades).items():
+        lines += ["", name, df.to_string()]
+    return "\n".join(lines)

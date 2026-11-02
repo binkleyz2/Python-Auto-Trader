@@ -1,8 +1,26 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.9.5 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.10.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.10.0 – 2026-11-02
+
+- **Backtest on months of real history:** `py -m swingbot backtest --days 120`. The bars come from Alpaca's
+  free full-market history (older than 15 minutes; paper keys are enough) and are cached in `data/`, so
+  later runs only fetch new days. `--universe` picks the stocks (default `sp500`; also `nasdaq100`, `dow`,
+  `russell2000`, `nasdaq`, or `watchlist`).
+- **The backtest now trades like the live bot:** it watches the best `watch_count` stocks from each day's
+  scan and takes the first signal among them, one position at a time, up to `max_trades_per_day` and the
+  daily loss limit. (Before, it traded only the single top pick.)
+- **Side-by-side comparisons:** `--try swing_n=4,5 --try breakeven_at_r=1,1.5` runs every combination
+  (up to 16) on the same data and prints one line each; saved as `backtests/compare.csv`.
+- **Results by setup, entry hour, exit and month** in each backtest report (`backtests/report.txt`).
+- **Results spreadsheet:** new **By setup** tab (long bounce, long breakout, short bounce, short breakdown:
+  trades, win rate, net and average P&L, average R) and **Trades** tab (every finished trade and its R).
+- Faster: swing points and the trend-line checks are about 3 times quicker (same results), which also
+  shortens the morning scan.
+- Backtest output now goes to `backtests/` (ignored by Git, like the downloaded history in `data/`).
 
 ## v1.9.5 – 2026-11-02
 

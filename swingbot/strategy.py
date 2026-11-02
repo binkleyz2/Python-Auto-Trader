@@ -27,15 +27,28 @@ from .config import Config
 # --------------------------------------------------------------------------- #
 # Indicators
 # --------------------------------------------------------------------------- #
+_NP: dict = {}
+
+
+def cols(df: pd.DataFrame) -> dict:
+    """The frame's columns as numpy arrays, made once per frame (frames aren't changed after they're built)."""
+    import weakref
+    k = id(df)
+    hit = _NP.get(k)
+    if hit is not None and hit[0]() is df:
+        return hit[1]
+    arrs = {c: df[c].to_numpy(float) for c in ("open", "high", "low", "close", "volume", "atr", "vol_avg") if c in df}
+    _NP[k] = (weakref.ref(df, lambda _, k=k: _NP.pop(k, None)), arrs)
+    return arrs
+
+
 def add_indicators(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     """Return a copy of ``df`` with ATR and 20-bar average volume columns."""
     out = df.copy()
-    prev_close = out["close"].shift(1)
-    tr = pd.concat(
-        [out["high"] - out["low"], (out["high"] - prev_close).abs(), (out["low"] - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    out["atr"] = tr.rolling(cfg.atr_period, min_periods=cfg.atr_period).mean()
+    h, l, c = (out[k].to_numpy(float) for k in ("high", "low", "close"))
+    prev = np.r_[np.nan, c[:-1]]
+    tr = np.fmax(h - l, np.fmax(np.abs(h - prev), np.abs(l - prev)))   # first bar: high - low
+    out["atr"] = pd.Series(tr, index=out.index).rolling(cfg.atr_period, min_periods=cfg.atr_period).mean()
     # average of the 20 bars *before* this one, so the current bar can be compared to it
     out["vol_avg"] = out["volume"].shift(1).rolling(20, min_periods=20).mean()
     return out
@@ -54,13 +67,14 @@ def find_swings(df: pd.DataFrame, n: int) -> tuple[np.ndarray, np.ndarray]:
     size = len(df)
     is_low = np.zeros(size, bool)
     is_high = np.zeros(size, bool)
-    for i in range(n, size - n):
-        left_l, right_l = lows[i - n:i], lows[i + 1:i + n + 1]
-        if lows[i] < left_l.min() and lows[i] <= right_l.min():
-            is_low[i] = True
-        left_h, right_h = highs[i - n:i], highs[i + 1:i + n + 1]
-        if highs[i] > left_h.max() and highs[i] >= right_h.max():
-            is_high[i] = True
+    if size < 2 * n + 1 or n < 1:
+        return is_low, is_high
+    from numpy.lib.stride_tricks import sliding_window_view as win
+    # windows of n bars: left[k] = bars k..k+n-1, so for bar i the left side is left[i-n], the right left[i+1]
+    lo_w, hi_w = win(lows, n).min(axis=1), win(highs, n).max(axis=1)
+    i = np.arange(n, size - n)
+    is_low[i] = (lows[i] < lo_w[i - n]) & (lows[i] <= lo_w[i + 1])
+    is_high[i] = (highs[i] > hi_w[i - n]) & (highs[i] >= hi_w[i + 1])
     return is_low, is_high
 
 
@@ -99,12 +113,10 @@ def _build_line(df: pd.DataFrame, t: int, cfg: Config, swing_mask: np.ndarray, k
     if len(idx) < 2:
         return None
 
-    price_col = "low" if kind == "support" else "high"
-    prices = df[price_col].to_numpy(float)
-    closes = df["close"].to_numpy(float)
-    lows = df["low"].to_numpy(float)
-    highs = df["high"].to_numpy(float)
-    atr = float(df["atr"].iat[t]) if not np.isnan(df["atr"].iat[t]) else np.nan
+    a = cols(df)
+    closes, lows, highs = a["close"], a["low"], a["high"]
+    prices = lows if kind == "support" else highs
+    atr = float(a["atr"][t])
     if np.isnan(atr) or atr <= 0:
         return None
 
@@ -170,11 +182,11 @@ class Signal:
 
 def signal_at(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray, is_high: np.ndarray) -> Signal | None:
     """Long signal on the close of bar ``t``, or None. ``df`` must have indicator columns."""
-    row = df.iloc[t]
-    atr = row["atr"]
+    a = cols(df)
+    atr = a["atr"][t]
     if np.isnan(atr) or atr <= 0:
         return None
-    o, h, l, c = row["open"], row["high"], row["low"], row["close"]
+    o, h, l, c = a["open"][t], a["high"][t], a["low"][t], a["close"][t]
 
     # --- Bounce off a rising support line ---------------------------------
     if cfg.enable_bounce:
@@ -196,13 +208,13 @@ def signal_at(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray, is_high
         if res is not None:
             lv = res.value_at(t)
             broke = c > lv + cfg.break_tolerance_atr * atr
-            prev_c = df["close"].iat[t - 1]
+            prev_c = a["close"][t - 1]
             prev_lv = res.value_at(t - 1)
             fresh = prev_c <= prev_lv + cfg.break_tolerance_atr * atr
             vol_ok = True
             if cfg.breakout_volume_mult > 0:
-                va = row["vol_avg"]
-                vol_ok = (not np.isnan(va)) and row["volume"] >= cfg.breakout_volume_mult * va
+                va = a["vol_avg"][t]
+                vol_ok = (not np.isnan(va)) and a["volume"][t] >= cfg.breakout_volume_mult * va
             if broke and fresh and vol_ok and c > o:
                 stop = min(lv - cfg.stop_buffer_atr * atr, c - cfg.min_stop_atr * atr)
                 if 0 < c - stop <= cfg.max_stop_atr * atr:
@@ -248,14 +260,15 @@ def trailing_stop(df: pd.DataFrame, t: int, cfg: Config, is_low: np.ndarray,
     idx = np.flatnonzero(is_low[from_bar:last + 1])
     if not len(idx):
         return current_stop
-    atr = df["atr"].iat[t]
+    a = cols(df)
+    atr = a["atr"][t]
     if np.isnan(atr) or atr <= 0:
         return current_stop
     buf = cfg.trail_buffer_atr if cfg.trail_buffer_atr is not None else cfg.stop_buffer_atr
-    candidate = df["low"].iat[from_bar + idx[-1]] - buf * atr
-    if candidate >= df["close"].iat[t]:
+    candidate = a["low"][from_bar + idx[-1]] - buf * atr
+    if candidate >= a["close"][t]:
         return current_stop
-    candidate = min(candidate, min_stop_price(df["close"].iat[t], cfg))   # never trail closer than min_stop_pct
+    candidate = min(candidate, min_stop_price(a["close"][t], cfg))   # never trail closer than min_stop_pct
     if candidate - current_stop < cfg.trail_min_step_atr * atr:     # skip tiny moves (fewer order changes)
         return current_stop
     return candidate
