@@ -1,8 +1,17 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.9.4 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.9.5 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.9.5 – 2026-11-02
+
+- **Fix: bars across a daylight-saving change.** Daylight saving time ended on Sunday, so a week of Public's
+  bars now mixes -04:00 (up to Friday) and -05:00 (from Monday) times. pandas refused to combine them
+  ("Tz-aware datetime.datetime cannot be converted to datetime64 unless utc=True"), so the 9:35 rescan lost
+  2,184 of 2,535 stocks and picked from the few that had no bars yet today. Without the fix, every scan
+  until the old bars age out (about a week) would have failed the same way, and again in March when
+  daylight saving starts. Times are now converted through UTC; tests cover both changes.
 
 ## v1.9.4 – 2026-10-28
 

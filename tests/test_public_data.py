@@ -143,3 +143,19 @@ def test_rate_limiter_spaces_calls():
     for _ in range(11):
         rl.wait()
     assert time.monotonic() - t0 >= 0.19                          # 10 gaps of 20 ms
+
+
+@pytest.mark.parametrize("change", [("2026-10-30", "-04:00", "2026-11-02", "-05:00"),    # daylight saving ends
+                                    ("2027-03-12", "-05:00", "2027-03-15", "-04:00")])   # and starts
+def test_week_of_bars_across_a_daylight_saving_change(change):
+    """2026-11-02: 'Tz-aware datetime.datetime cannot be converted to datetime64 unless utc=True' for every
+    stock once Monday's bars (-05:00) joined Friday's (-04:00)."""
+    from types import SimpleNamespace
+    from swingbot.data import bars_from_public
+    d1, o1, d2, o2 = change
+    bars = [SimpleNamespace(timestamp=f"{d1}T15:50:00{o1}", open=1, high=2, low=0.5, close=1.5, volume=10),
+            SimpleNamespace(timestamp=f"{d1}T15:55:00{o1}", open=1, high=2, low=0.5, close=1.5, volume=10),
+            SimpleNamespace(timestamp=f"{d2}T09:30:00{o2}", open=2, high=3, low=1.5, close=2.5, volume=10)]
+    df = bars_from_public(SimpleNamespace(regular_market=SimpleNamespace(bars=bars)))
+    assert len(df) == 3 and str(df.index.tz) == "America/New_York"
+    assert [t.strftime("%m-%d %H:%M") for t in df.index] == [f"{d1[5:]} 15:50", f"{d1[5:]} 15:55", f"{d2[5:]} 09:30"]

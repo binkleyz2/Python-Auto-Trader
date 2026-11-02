@@ -20,7 +20,11 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
     """Index by ET timestamps (bar start), keep regular-hours bars only, sort, de-duplicate."""
     if df is None or len(df) == 0:
         return empty_bars()
-    idx = pd.DatetimeIndex(df.index)
+    idx = df.index
+    if not isinstance(idx, pd.DatetimeIndex):
+        # 2026-11-02: a week of bars spanning the end of daylight saving time mixes -04:00 and -05:00
+        # offsets, which pandas only accepts when converted to UTC first (naive times count as UTC)
+        idx = pd.to_datetime(idx, utc=True)
     idx = idx.tz_localize("UTC") if idx.tz is None else idx
     df = df.copy()
     df.index = idx.tz_convert(ET)
