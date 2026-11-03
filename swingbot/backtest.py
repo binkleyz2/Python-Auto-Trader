@@ -16,7 +16,7 @@ import pandas as pd
 
 from .config import Config
 from .scanner import scan
-from .strategy import (add_indicators, better_stop, find_swings, mirror, sided_breakeven_stop, sided_trailing_stop,
+from .strategy import (add_indicators, better_stop, cols, find_swings, mirror, sided_breakeven_stop, sided_trailing_stop,
                        signals_at, target_for)
 
 
@@ -64,7 +64,7 @@ def simulate_watch(sessions: list[tuple], equity: float, cfg: Config) -> list[Tr
     trades: list[Trade] = []
     loss_limit = equity * cfg.daily_loss_limit_pct / 100
     state = dict(pos=None, pending=None, day_pnl=0.0)
-    at = {s[0]: {s[1].index[i]: int(i) for i in s[5]} for s in sessions}       # symbol -> {timestamp: position}
+    at = {s[0]: dict(zip(s[1].index[s[5]], map(int, s[5]))) for s in sessions}       # symbol -> {timestamp: position}
     info = {s[0]: s for s in sessions}
     rank = {s[0]: k + 1 for k, s in enumerate(sessions)}
     timeline = sorted(set().union(*[set(m) for m in at.values()])) if at else []
@@ -118,7 +118,8 @@ def simulate_watch(sessions: list[tuple], equity: float, cfg: Config) -> list[Tr
             sym = pos["sym"]
             d, lo, hi, md = info[sym][1], info[sym][2], info[sym][3], info[sym][4]
             t = at[sym][ts]
-            bar = d.iloc[t]
+            a = cols(d)
+            bar = {k: a[k][t] for k in ("open", "high", "low", "close")}
             if pos["side"] > 0:
                 if bar["low"] <= pos["stop"]:
                     close_pos(sym, t, min(bar["open"], pos["stop"]), "stop")

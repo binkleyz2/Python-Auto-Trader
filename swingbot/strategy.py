@@ -42,6 +42,23 @@ def cols(df: pd.DataFrame) -> dict:
     return arrs
 
 
+_IDX: dict = {}
+
+
+def _swing_idx(mask: np.ndarray) -> np.ndarray:
+    """Positions of the True bars in a swing mask, made once per mask (masks aren't changed after
+    find_swings builds them). Keyed by id, checked against the array's buffer so a reused id is caught."""
+    k = id(mask)
+    hit = _IDX.get(k)
+    if hit is not None and hit[0] is mask:
+        return hit[1]
+    if len(_IDX) > 4096:
+        _IDX.clear()
+    idx = np.flatnonzero(mask)
+    _IDX[k] = (mask, idx)
+    return idx
+
+
 def add_indicators(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     """Return a copy of ``df`` with ATR and 20-bar average volume columns."""
     out = df.copy()
@@ -109,7 +126,8 @@ def _build_line(df: pd.DataFrame, t: int, cfg: Config, swing_mask: np.ndarray, k
     last_confirmed = t - n                       # newest bar that can be a confirmed swing at time t
     if last_confirmed < 0:
         return None
-    idx = np.flatnonzero(swing_mask[: last_confirmed + 1])
+    all_idx = _swing_idx(swing_mask)
+    idx = all_idx[: np.searchsorted(all_idx, last_confirmed, side="right")]
     if len(idx) < 2:
         return None
 
@@ -134,26 +152,23 @@ def _build_line(df: pd.DataFrame, t: int, cfg: Config, swing_mask: np.ndarray, k
 
         slope = (p2 - p1) / (i2 - i1)
         check_end = t if kind == "support" else t - 1    # resistance: bar t may break
-        span = np.arange(i1 + 1, check_end + 1)
-        if len(span):
-            line_vals = p1 + slope * (span - i1)
+        if check_end > i1:
+            line_vals = p1 + slope * np.arange(1, check_end - i1 + 1)
+            seg = closes[i1 + 1: check_end + 1]
             if kind == "support":
-                if np.any(closes[span] < line_vals - cfg.break_tolerance_atr * atr):
+                if (seg < line_vals - cfg.break_tolerance_atr * atr).any():
                     continue
             else:
-                if np.any(closes[span] > line_vals + cfg.break_tolerance_atr * atr):
+                if (seg > line_vals + cfg.break_tolerance_atr * atr).any():
                     continue
 
         # touches after the second anchor (excluding the anchor itself and its neighbours)
-        touch_span = np.arange(i2 + n + 1, t)
+        start = i2 + n + 1
         touches = 0
-        if len(touch_span):
-            lv = p1 + slope * (touch_span - i1)
+        if t > start:
+            lv = p1 + slope * np.arange(start - i1, t - i1)
             tol = cfg.touch_tolerance_atr * atr
-            if kind == "support":
-                touches = int(np.sum(np.abs(lows[touch_span] - lv) <= tol))
-            else:
-                touches = int(np.sum(np.abs(highs[touch_span] - lv) <= tol))
+            touches = int(np.count_nonzero(np.abs(prices[start:t] - lv) <= tol))
         return TrendLine(kind, int(i1), int(i2), float(p1), float(p2), touches)
     return None
 
