@@ -110,22 +110,25 @@ MAX_RUNS = 64
 _RANGE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*(?:[:/]\s*(\d+(?:\.\d+)?))?\s*$")
 
 
-def try_values(vals: str) -> list:
+def try_values(vals: str, step=None) -> list:
     """Values for --try: a list ("1,1.5,2"), a range ("4-8", every whole number), a range with a step
-    ("1-2:0.25" = 1, 1.25, 1.5, 1.75, 2), or a mix ("2,4-6"). true/false and numbers as in config.yaml."""
+    ("1-2:0.25" = 1, 1.25, 1.5, 1.75, 2), or a mix ("2,4-6"). true/false and numbers as in config.yaml.
+    ``step`` (from --step) is used for ranges that don't give their own."""
     import yaml
     from decimal import Decimal
     out = []
+    step = None if step is None else str(step)
     for part in [v.strip() for v in vals.split(",") if v.strip()]:
         m = _RANGE.match(part)
         if not m:
             out.append(yaml.safe_load(part))
             continue
-        lo, hi, step = m.group(1), m.group(2), m.group(3)
-        whole = "." not in lo + hi + (step or "")
-        if step is None and not whole:
-            raise ValueError(f"{part}: give a step for decimals, e.g. {lo}-{hi}:0.25")
-        a, b, st = Decimal(lo), Decimal(hi), Decimal(step or "1")
+        lo, hi, own = m.group(1), m.group(2), m.group(3)
+        st_txt = own or step
+        whole = "." not in lo + hi + (st_txt or "")
+        if st_txt is None and not whole:
+            raise ValueError(f"{part}: give a step for decimals, e.g. {lo}-{hi}:0.25 or --step 0.25")
+        a, b, st = Decimal(lo), Decimal(hi), Decimal(st_txt or "1")
         if st <= 0 or b < a:
             raise ValueError(f"{part}: write ranges low-high with a step above 0")
         n = int((b - a) / st) + 1
@@ -139,12 +142,39 @@ def _forced(args) -> list[str] | None:
     return [x.strip().upper() for x in args.symbol.split(",") if x.strip()] if getattr(args, "symbol", None) else None
 
 
-def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None) -> None:
+def _steps(steps: list[str] | None, cfg: Config) -> tuple[str | None, dict[str, str]]:
+    """--step 0.5 (every range without its own step) and --step setting=0.5 (just that one)."""
+    every, each = None, {}
+    for t in steps or []:
+        key, _, val = t.rpartition("=")
+        key, val = key.strip(), val.strip()
+        try:
+            if float(val) <= 0:
+                raise ValueError
+        except ValueError:
+            sys.exit(f"--step {t}: give a number above 0, e.g. --step 0.5 or --step breakeven_at_r=0.5")
+        if not key:
+            every = val
+        elif not hasattr(cfg, key):
+            sys.exit(f"--step: unknown setting {key!r}")
+        else:
+            each[key] = val
+    return every, each
+
+
+def _whole(cfg: Config, key: str) -> bool:
+    v = getattr(cfg, key)
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None,
+             steps: list[str] | None = None) -> None:
     """Run the backtest for every combination of the --try values and print them side by side."""
     import dataclasses
     import itertools
     import yaml
     from . import backtest as bt
+    every, each = _steps(steps, cfg)
     options = []
     for t in tries:
         if "=" not in t:
@@ -157,10 +187,19 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
             vs = [v.strip().strip("\"'") for v in vals.split(",")]
             options.append([(key, "" if v.lower() in ("off", "none") else v) for v in vs if v or len(vs) == 1])
         else:
+            step = each.get(key)
+            if step is None and every is not None and not (_whole(cfg, key) and "." in every):
+                step = every                             # a 0.5 step doesn't apply to whole-number settings
+            if step is not None and _whole(cfg, key) and "." in step:
+                sys.exit(f"--step {key}={step}: {key} takes whole numbers")
             try:
-                options.append([(key, v) for v in try_values(vals)])
+                vs = try_values(vals, step)
             except ValueError as e:
                 sys.exit(f"--try {t}: {e}")
+            if _whole(cfg, key) and any(isinstance(v, float) and v != int(v) for v in vs):
+                sys.exit(f"--try {t}: {key} takes whole numbers")
+            options.append([(key, v) for v in vs])
+            print(f"{key}: {', '.join(str(v) for v in vs)}", flush=True)
     combos = list(itertools.product(*options))
     if len(combos) > MAX_RUNS:
         sys.exit(f"--try: {len(combos)} combinations - keep it to {MAX_RUNS} or fewer (fewer values, or a bigger step)")
@@ -262,6 +301,10 @@ def main(argv=None) -> None:
     ap.add_argument("--try", dest="tries", action="append", default=[], metavar="SETTING=A,B",
                     help="backtest: compare values side by side, e.g. --try swing_n=4-8 --try breakeven_at_r=1-2:0.5 "
                          "(lists like 1,1.5 work too)")
+    ap.add_argument("--step", dest="steps", action="append", default=[], metavar="N or SETTING=N",
+                    help="backtest --try: gap between values in a range, e.g. --try breakeven_at_r=1-2 --step 0.5 "
+                         "(1, 1.5, 2); --step breakeven_at_r=0.5 for just that setting. Whole-number settings "
+                         "like swing_n keep steps of 1 unless given a whole step")
     args = ap.parse_args(argv)
 
     _env()
@@ -290,8 +333,10 @@ def main(argv=None) -> None:
             hist = load_dir(args.data, [s.upper() for s in cfg.watchlist])
             if not hist:
                 sys.exit(f"No CSVs for the watchlist found in {args.data}/ (or use --days 120 for Alpaca's history)")
+        if args.steps and not args.tries:
+            sys.exit("--step goes with --try, e.g. --try breakeven_at_r=1-2 --step 0.5")
         if args.tries:
-            _compare(hist, cfg, args.tries, Path(args.out), _forced(args))
+            _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps)
             return
         print(f"Backtesting {len(hist)} stocks...", flush=True)
         trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args))

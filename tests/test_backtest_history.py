@@ -222,3 +222,22 @@ def test_try_range_runs_every_value(tmp_path):
     m._compare(hist, Config(min_avg_dollar_volume=0), ["swing_n=3-5", "breakeven_at_r=1-1.5:0.5"], tmp_path)
     table = pd.read_csv(tmp_path / "compare.csv", index_col=0)
     assert len(table) == 6 and "swing_n=4, breakeven_at_r=1.5" in table.index
+
+
+def test_step_switch(tmp_path, capsys):
+    from swingbot.__main__ import try_values, _compare
+    from swingbot.config import Config
+    assert try_values("1-2", "0.5") == [1.0, 1.5, 2.0]
+    assert try_values("1-2:0.25", "0.5") == [1.0, 1.25, 1.5, 1.75, 2.0]     # its own step wins
+    assert try_values("4-8", "2") == [4, 6, 8]
+    hist = {f"S{i:02d}": synthetic(f"S{i:02d}", days=12, seed=i)
+            for i in range(3)}
+    cfg = Config(min_avg_dollar_volume=0)
+    _compare(hist, cfg, ["swing_n=4-5", "breakeven_at_r=1-2"], tmp_path, steps=["0.5"])
+    out = capsys.readouterr().out
+    assert "swing_n: 4, 5" in out and "breakeven_at_r: 1.0, 1.5, 2.0" in out and "6 combinations" in out
+    _compare(hist, cfg, ["swing_n=4-8"], tmp_path, steps=["swing_n=2"])
+    assert "swing_n: 4, 6, 8" in capsys.readouterr().out
+    for bad in (["swing_n=0.5"], ["0"], ["nonsense=1"], ["x"]):
+        with pytest.raises(SystemExit):
+            _compare(hist, cfg, ["swing_n=4-5"], tmp_path, steps=bad)

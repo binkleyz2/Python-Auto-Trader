@@ -4,6 +4,13 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.14.0 - 2026-11-03
+
+- **`--step` switch for `--try` ranges:** `--try breakeven_at_r=1-2 --step 0.5` tries 1, 1.5 and 2.
+  `--step 0.5` applies to every range without its own step; `--step swing_n=2` applies to one setting.
+  Whole-number settings keep steps of 1 under a decimal `--step`, and refuse a decimal step of their own.
+- Before running, each setting's values are listed (e.g. `breakeven_at_r: 1.0, 1.5, 2.0`).
+
 ## v1.13.0 - 2026-11-03
 
 - **Ranges in `--try`:** `--try swing_n=4-8` tries 4, 5, 6, 7 and 8; `--try breakeven_at_r=1-2:0.25` tries
