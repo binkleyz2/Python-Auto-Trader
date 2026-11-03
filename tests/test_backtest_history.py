@@ -91,7 +91,7 @@ def test_watch_engine_follows_the_live_rules():
     one = bt.run(hist, Config(direction="both", min_avg_dollar_volume=0, watch_count=1, max_trades_per_day=3))[0]
     assert (one["rank"] == 1).all()
     tables = bt.breakdown(trades)
-    assert set(tables) == {"By setup", "By entry hour", "By exit", "By month"}
+    assert {"By setup", "By entry hour", "By exit", "By month"} <= set(tables)
     assert set(tables["By setup"].index) <= {"long bounce", "long breakout", "short bounce", "short breakdown"}
     assert tables["By setup"].trades.sum() == len(trades)
 
@@ -106,3 +106,85 @@ def test_compare_runs_each_combination(tmp_path, monkeypatch, capsys):
     assert (tmp_path / "report-breakeven_at_r1.5-trail_buffer_atr0.4.txt").exists()
     with pytest.raises(SystemExit):
         m._compare(hist, cfg, ["nonsense=1,2"], tmp_path)
+
+
+# ---------------------------------------------------------------- the midday rescan in the backtest
+def _hist(n=20, days=18):
+    return {f"S{i:02d}": synthetic(f"S{i:02d}", days=days, seed=i) for i in range(n)}
+
+
+def test_midday_rescan_picks_new_stocks_from_1245(tmp_path):
+    hist = _hist()
+    on = Config(direction="both", min_avg_dollar_volume=0, watch_count=3, max_trades_per_day=6)
+    trades, _, picks = bt.run(hist, on)
+    mids = [p["midday"] for p in picks if "midday" in p]
+    assert mids and all("12:45" <= m["time"] < "15:00" for m in mids)
+    after = trades[trades.scan == "midday"]
+    assert len(after) and (after.entry_time >= "12:45").all()
+    assert {"By scan (morning picks vs midday rescan)"} <= set(bt.breakdown(trades))
+    off = Config(direction="both", min_avg_dollar_volume=0, watch_count=3, max_trades_per_day=6, midday_rescan_time="")
+    t_off, _, p_off = bt.run(hist, off)
+    assert (t_off.scan == "morning").all() and not any("midday" in p for p in p_off)
+    same = ["date", "symbol", "kind", "entry_time", "exit_time", "reason", "r_multiple"]   # (sizes differ: equity)
+    pd.testing.assert_frame_equal(trades[trades.entry_time < "12:45"][same].reset_index(drop=True),
+                                  t_off[t_off.entry_time < "12:45"][same].reset_index(drop=True))
+
+
+def test_midday_rescan_sees_no_bars_from_after_its_time():
+    hist = _hist(15, 12)
+    cfg = Config(direction="both", min_avg_dollar_volume=0, watch_count=3)
+    _, _, picks = bt.run(hist, cfg)
+    day = next(p for p in picks if "midday" in p)
+    d0 = pd.Timestamp(day["date"]).date()
+    cut = pd.Timestamp(f"{day['date']} {day['midday']['time']}", tz="America/New_York")
+    changed = {}
+    for s, df in hist.items():                                             # scramble everything from 12:45 on
+        df = df.copy()
+        late = (df.index >= cut) & (df.index.date == d0)
+        df.loc[late, ["open", "high", "low", "close"]] *= 1.07
+        changed[s] = df
+    _, _, picks2 = bt.run(changed, cfg)
+    assert next(p for p in picks2 if p["date"] == day["date"])["midday"] == day["midday"]
+
+
+def test_midday_rescan_waits_for_the_open_trade(monkeypatch):
+    from swingbot import strategy
+    hist = _hist(6, 8)
+    cfg = Config(min_avg_dollar_volume=0, watch_count=2, use_target=False, trail_stop=False, breakeven_at_r=0)
+    prep = bt.prepare(hist, cfg)
+    day = sorted(set(next(iter(prep.values()))[3]))[-1]
+    sessions = [(s, d, lo, hi, md, np.flatnonzero(dates == day)) for s, (d, lo, hi, dates, md) in list(prep.items())[:2]]
+    calls = []
+
+    def run_with(exit_at):
+        """One signal at 12:00 on the first stock; its stop is hit at ``exit_at`` (None = never)."""
+        def fake_signals(d, md, t, cfg_, lo, hi):
+            if d.index[t].strftime("%H:%M") == "12:00" and not calls:
+                c = float(d["close"].iat[t])
+                return strategy.Signal("bounce", t, None, c, c * 0.5, c)
+            return None
+        monkeypatch.setattr(bt, "signals_at", fake_signals)
+        d = sessions[0][1]
+        if exit_at:
+            d = d.copy()
+            hit = [i for i in sessions[0][5] if d.index[i].strftime("%H:%M") == exit_at][0]
+            d.iloc[hit, d.columns.get_loc("low")] = 0.01
+            ses = [(sessions[0][0], d) + sessions[0][2:]] + sessions[1:]
+        else:
+            ses = sessions
+        got = []
+        bt.simulate_watch(ses, 25_000, cfg, rescan=lambda ts: got.append(ts.strftime("%H:%M")))
+        return got
+    assert run_with("13:30") == ["13:35"]            # in a trade at 12:45: rescans at the first bar after it closes
+    assert run_with(None) == []                       # still open at 15:00: dropped for the day
+    assert run_with("15:20") == []                    # closed after 15:00: too late
+
+
+
+def test_try_keeps_times_as_text_and_understands_off(tmp_path):
+    from swingbot import __main__ as m
+    hist = _hist(8, 10)
+    m._compare(hist, Config(min_avg_dollar_volume=0), ["midday_rescan_time=12:45,off"], tmp_path)
+    table = pd.read_csv(tmp_path / "compare.csv", index_col=0)
+    assert list(table.index) == ["midday_rescan_time=12:45", "midday_rescan_time=off"]
+    assert (tmp_path / "report-midday_rescan_time1245.txt").exists()          # no ":" in Windows file names

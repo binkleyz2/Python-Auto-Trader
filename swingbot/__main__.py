@@ -118,7 +118,11 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path) -> None:
         key = key.strip()
         if not hasattr(cfg, key):
             sys.exit(f"--try: unknown setting {key!r}")
-        options.append([(key, yaml.safe_load(v)) for v in vals.split(",") if v.strip()])
+        if isinstance(getattr(cfg, key), str):          # times stay text ("12:45" isn't a number); off = ""
+            vs = [v.strip().strip("\"'") for v in vals.split(",")]
+            options.append([(key, "" if v.lower() in ("off", "none") else v) for v in vs if v or len(vs) == 1])
+        else:
+            options.append([(key, yaml.safe_load(v)) for v in vals.split(",") if v.strip()])
     combos = list(itertools.product(*options))
     if len(combos) > 16:
         sys.exit(f"--try: {len(combos)} combinations - keep it to 16 or fewer")
@@ -130,14 +134,14 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path) -> None:
             c.validate()
         except ValueError as e:
             sys.exit(f"--try {dict(combo)}: {e}")
-        label = ", ".join(f"{k}={v}" for k, v in combo)
+        label = ", ".join(f"{k}={v if v != '' else 'off'}" for k, v in combo)
         print(f"[{n}/{len(combos)}] {label}", flush=True)
         pk = (c.swing_n, c.atr_period, c.direction != "long")
         if pk not in prepared:
             prepared[pk] = bt.prepare(hist, c)
         trades, curve, _ = bt.run(hist, c, scan_cache=scan_cache, prepared=prepared[pk], progress=_progress("days"))
         s = bt.summarize(trades, curve, c)
-        tag = "-".join(f"{k}{v}" for k, v in combo).replace(" ", "")
+        tag = "-".join(f"{k}{v if v != '' else 'off'}" for k, v in combo).replace(" ", "").replace(":", "")
         trades.to_csv(out / f"trades-{tag}.csv", index=False)
         (out / f"report-{tag}.txt").write_text(bt.report_text(trades, curve, c, label) + "\n", encoding="utf-8")
         rows.append({"settings": label, "trades": s.get("trades", 0), "win %": s.get("win_rate_pct"),

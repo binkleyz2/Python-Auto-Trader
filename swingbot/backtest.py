@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .scanner import scan
+from .scanner import avg_dollar_volume, scan
 from .strategy import (add_indicators, better_stop, cols, find_swings, mirror, sided_breakeven_stop, sided_trailing_stop,
                        signals_at, target_for)
 
@@ -42,7 +42,8 @@ class Trade:
     pnl: float
     r_multiple: float
     side: str = "long"   # "long" or "short"
-    rank: int = 1        # the stock's place in that morning's scan (1 = best)
+    rank: int = 1        # the stock's place in the scan it was picked from (1 = best)
+    scan: str = "morning"  # "morning", or "midday" for a stock picked by the midday rescan
 
 
 def position_size(equity: float, entry: float, stop: float, cfg: Config, side: int = 1) -> int:
@@ -55,18 +56,27 @@ def position_size(equity: float, entry: float, stop: float, cfg: Config, side: i
 
 
 # --------------------------------------------------------------------------------- one session
-def simulate_watch(sessions: list[tuple], equity: float, cfg: Config) -> list[Trade]:
+def simulate_watch(sessions: list[tuple], equity: float, cfg: Config, rescan=None) -> list[Trade]:
     """Trade one session over several watched symbols, best-ranked first.
     ``sessions`` = [(symbol, d, is_low, is_high, md, day_idx), ...] where ``day_idx`` are the positions of
-    today's bars in ``d`` (d has the earlier days too, so lines and swings can reach back)."""
+    today's bars in ``d`` (d has the earlier days too, so lines and swings can reach back).
+    ``rescan(ts)`` = the midday rescan: new sessions ranked on the bars before ``ts`` (None = keep the
+    morning list). Like the live bot it runs once, at ``midday_rescan_time``, or after an open trade closes
+    if that is before ``midday_rescan_by``; not after the trade or loss limit."""
     first_entry, last_entry, flatten = _t(cfg.first_entry_time), _t(cfg.last_entry_time), _t(cfg.flatten_time)
     slip = cfg.slippage_pct / 100
     trades: list[Trade] = []
     loss_limit = equity * cfg.daily_loss_limit_pct / 100
-    state = dict(pos=None, pending=None, day_pnl=0.0)
-    at = {s[0]: dict(zip(s[1].index[s[5]], map(int, s[5]))) for s in sessions}       # symbol -> {timestamp: position}
-    info = {s[0]: s for s in sessions}
-    rank = {s[0]: k + 1 for k, s in enumerate(sessions)}
+    state = dict(pos=None, pending=None, day_pnl=0.0, scan="morning")
+    mid = _t(cfg.midday_rescan_time) if rescan is not None and str(cfg.midday_rescan_time or "").strip() else None
+    mid_by = _t(cfg.midday_rescan_by) if mid is not None else None
+    mid_done = mid is None
+
+    def load(sessions_):
+        a = {s[0]: dict(zip(s[1].index[s[5]], map(int, s[5]))) for s in sessions_}   # symbol -> {timestamp: position}
+        return a, {s[0]: s for s in sessions_}, {s[0]: k + 1 for k, s in enumerate(sessions_)}
+
+    at, info, rank = load(sessions)
     timeline = sorted(set().union(*[set(m) for m in at.values()])) if at else []
 
     def close_pos(sym, t, price, reason):
@@ -85,12 +95,29 @@ def simulate_watch(sessions: list[tuple], equity: float, cfg: Config) -> list[Tr
             target=round(pos["target"], 4) if pos["target"] is not None else float("nan"),
             shares=pos["shares"], exit_time=d.index[t].strftime("%H:%M"), exit=round(fill, 4), reason=reason,
             pnl=round(pnl, 2), r_multiple=round(pnl / risk, 2) if risk else 0.0,
-            side="long" if side > 0 else "short", rank=rank[sym]))
+            side="long" if side > 0 else "short", rank=pos["rank"], scan=pos["scan"]))
         state["day_pnl"] += pnl
         state["pos"] = None
 
-    for ts in timeline:
+    i = 0
+    while i < len(timeline):
+        ts = timeline[i]
+        i += 1
         bt = ts.time()
+        # 0) the midday rescan, at the open of the first bar at or after its time (bars before it are complete)
+        if not mid_done and bt >= mid:
+            if bt >= mid_by or len(trades) >= cfg.max_trades_per_day or state["day_pnl"] <= -loss_limit:
+                mid_done = True                           # too late (a trade ran past it), or no entries left
+            elif state["pos"] is None and state["pending"] is None:
+                mid_done = True
+                new = rescan(ts)
+                if new:
+                    sessions = new
+                    at, info, rank = load(sessions)
+                    state["scan"] = "midday"
+                    timeline = sorted(t_ for t_ in set().union(*[set(m) for m in at.values()]) if t_ >= ts)
+                    i = 0
+                    continue
         pos = state["pos"]
         # 1) the open of this bar: sell at 15:50, or fill a waiting entry
         if pos is not None and bt >= flatten and ts in at[pos["sym"]]:
@@ -110,6 +137,7 @@ def simulate_watch(sessions: list[tuple], equity: float, cfg: Config) -> list[Tr
                     if shares > 0:
                         state["pos"] = dict(sym=sym, kind=sig.kind, side=side, entry=entry, stop=sig.stop,
                                             init_stop=sig.stop, shares=shares, from_bar=sig.bar,
+                                            rank=rank[sym], scan=state["scan"],
                                             target=target_for(entry, sig.stop, cfg) if cfg.use_target else None,
                                             time=d.index[t].strftime("%H:%M"))
         # 2) inside this bar: stop first (cautious), then target
@@ -218,13 +246,44 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
         picks.append({"date": str(day), "symbol": watched[0][0] if watched else None,
                       "setup": watched[0][2] if watched else "none", "detail": watched[0][3] if watched else "",
                       "watched": [w[0] for w in watched]})
-        sessions = []
-        for sym, *_ in watched:
-            d, lo, hi, dates, md = prepared[sym]
-            day_idx = np.flatnonzero(dates == day)
-            if len(day_idx):
-                sessions.append((sym, d, lo, hi, md, day_idx))
-        for tr in simulate_watch(sessions, equity, cfg):
+
+        def sessions_for(syms, day=day):
+            out = []
+            for sym in syms:
+                d, lo, hi, dates, md = prepared[sym]
+                day_idx = np.flatnonzero(dates == day)
+                if len(day_idx):
+                    out.append((sym, d, lo, hi, md, day_idx))
+            return out
+
+        def midday(ts, day=day, window_start=window_start, pick=picks[-1]):
+            """The live midday rescan: the same window as the morning plus today's bars before ``ts``; the
+            volume screen uses full days only, as live."""
+            ck2 = (key, day, ts.time())
+            if scan_cache is not None and ck2 in scan_cache:
+                ranked2 = scan_cache[ck2]
+            else:
+                prior, pre, dv = {}, {}, {}
+                for sym, (d, lo, hi, dates, md) in prepared.items():
+                    a, b0 = np.searchsorted(dates, window_start), np.searchsorted(dates, day)
+                    if not (b0 > a and b0 < len(dates) and dates[b0] == day):
+                        continue
+                    b = int(d.index.searchsorted(ts))
+                    w = d.iloc[a:b]
+                    prior[sym] = w
+                    pre[sym] = (w, lo[a:b], hi[a:b], md.iloc[a:b] if md is not None else None)
+                    dv[sym] = avg_dollar_volume(d.iloc[a:b0])
+                ranked2 = [(r.symbol, r.score, r.setup, r.detail)
+                           for r in scan(prior, cfg, dollar_volume=dv, pre=pre) if r.score > 0]
+                if scan_cache is not None:
+                    scan_cache[ck2] = ranked2
+            if not ranked2:
+                return None                               # no setups: keep the morning list (as live)
+            new = [w[0] for w in ranked2[:max(1, int(cfg.watch_count))]]
+            pick["midday"] = dict(time=ts.strftime("%H:%M"), watched=new)
+            return sessions_for(new)
+
+        for tr in simulate_watch(sessions_for([w[0] for w in watched]), equity, cfg, rescan=midday):
             equity += tr.pnl
             trades.append(tr)
         curve[pd.Timestamp(day)] = equity
@@ -280,7 +339,10 @@ def breakdown(trades: pd.DataFrame) -> dict[str, pd.DataFrame]:
     t["hour"] = [f"{h:02d}:00" for h in t.entry_time.str[:2].astype(int)]
     t["month"] = t.date.str[:7]
     out = {}
-    for name, col in (("By setup", "setup"), ("By entry hour", "hour"), ("By exit", "reason"), ("By month", "month")):
+    groups = [("By setup", "setup"), ("By entry hour", "hour"), ("By exit", "reason"), ("By month", "month")]
+    if "scan" in t and t.scan.nunique() > 1:
+        groups.insert(1, ("By scan (morning picks vs midday rescan)", "scan"))
+    for name, col in groups:
         rows = {key: _table(g) for key, g in t.groupby(col)}
         out[name] = pd.DataFrame.from_dict(rows, orient="index")
     return out

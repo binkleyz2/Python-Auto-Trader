@@ -1,8 +1,18 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.10.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.12.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.12.0 - 2026-11-03
+
+- **The backtest does the midday rescan too.** At `midday_rescan_time` it ranks the stocks again using that
+  day's bars so far (and only those: no bar from after the rescan time is seen), and watches the new best
+  ones, as the live bot does. In a trade it waits for the trade to close, if that is before
+  `midday_rescan_by`; it's skipped after the trade or loss limit; with no setups the morning list stays.
+- Each backtest trade is marked `morning` or `midday` (`scan` column in `trades.csv`), and the report has a
+  **By scan** table. To see whether the rescan helps: `--try midday_rescan_time=12:45,off`.
+- A backtest now runs the scan twice a day, so it takes about half as long again.
 
 ## v1.11.0 - 2026-11-03
 

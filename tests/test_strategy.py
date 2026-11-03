@@ -69,7 +69,9 @@ def test_position_size(cfg):
 
 
 def test_backtest_flat_by_close_and_rules(cfg):
+    import dataclasses
     hist = {s: synthetic(s, days=20) for s in ["AAA", "BBB", "CCC"]}
+    cfg = dataclasses.replace(cfg, watch_count=1, midday_rescan_time="")   # the top pick only, all day
     trades, curve, picks = bt.run(hist, cfg)
     assert not trades.empty
     assert (trades.exit_time <= cfg.flatten_time).all()
