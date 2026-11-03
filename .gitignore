@@ -14,3 +14,5 @@ config.yaml
 # backtests: downloaded history and results (rebuilt any time)
 data/
 backtests/
+secrets.txt
+config.mine.yaml
