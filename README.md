@@ -247,7 +247,7 @@ py -m swingbot backtest --days 120
 py -m swingbot backtest --days 120 --try swing_n=4,5 --try breakeven_at_r=1,1.5
 ```
 
-Every combination (here 4, up to 16) runs on the same data and prints one line each: trades, win rate, average R, profit factor, net, return and drawdown. It's saved as `backtests/compare.csv`, with each run's full report and trades next to it. Any setting in `config.yaml` can be tried this way.
+Values can be a list (`1,1.5,2`), a range of whole numbers (`swing_n=4-8` = 4, 5, 6, 7, 8), a range with a step (`breakeven_at_r=1-2:0.25` = 1, 1.25, 1.5, 1.75, 2), or a mix (`2,4-6`). Every combination (here 4, up to 64) runs on the same data and prints one line each: trades, win rate, average R, profit factor, net, return and drawdown. It's saved as `backtests/compare.csv`, with each run's full report and trades next to it. Any setting in `config.yaml` can be tried this way.
 
 **Reading the results:** average R (the average trade's result in multiples of its initial risk) is the number to watch. Above 0 means the winners pay for the losers; a few hundred trades are needed before the difference between two settings means much. A setting that only wins in one month, or only with one setup, is more likely luck than an edge. And a backtest is the best case: real fills (CELC filled 28 cents worse than its signal price on 2026-10-27) and spreads cost more than `slippage_pct`.
 

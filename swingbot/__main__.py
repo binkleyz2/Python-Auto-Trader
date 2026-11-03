@@ -106,6 +106,35 @@ def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
     return hist
 
 
+MAX_RUNS = 64
+_RANGE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*(?:[:/]\s*(\d+(?:\.\d+)?))?\s*$")
+
+
+def try_values(vals: str) -> list:
+    """Values for --try: a list ("1,1.5,2"), a range ("4-8", every whole number), a range with a step
+    ("1-2:0.25" = 1, 1.25, 1.5, 1.75, 2), or a mix ("2,4-6"). true/false and numbers as in config.yaml."""
+    import yaml
+    from decimal import Decimal
+    out = []
+    for part in [v.strip() for v in vals.split(",") if v.strip()]:
+        m = _RANGE.match(part)
+        if not m:
+            out.append(yaml.safe_load(part))
+            continue
+        lo, hi, step = m.group(1), m.group(2), m.group(3)
+        whole = "." not in lo + hi + (step or "")
+        if step is None and not whole:
+            raise ValueError(f"{part}: give a step for decimals, e.g. {lo}-{hi}:0.25")
+        a, b, st = Decimal(lo), Decimal(hi), Decimal(step or "1")
+        if st <= 0 or b < a:
+            raise ValueError(f"{part}: write ranges low-high with a step above 0")
+        n = int((b - a) / st) + 1
+        if n > MAX_RUNS:
+            raise ValueError(f"{part} gives {n} values - use a bigger step")
+        out += [int(a + st * k) if whole else float(a + st * k) for k in range(n)]
+    return list(dict.fromkeys(out))
+
+
 def _forced(args) -> list[str] | None:
     return [x.strip().upper() for x in args.symbol.split(",") if x.strip()] if getattr(args, "symbol", None) else None
 
@@ -128,10 +157,15 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
             vs = [v.strip().strip("\"'") for v in vals.split(",")]
             options.append([(key, "" if v.lower() in ("off", "none") else v) for v in vs if v or len(vs) == 1])
         else:
-            options.append([(key, yaml.safe_load(v)) for v in vals.split(",") if v.strip()])
+            try:
+                options.append([(key, v) for v in try_values(vals)])
+            except ValueError as e:
+                sys.exit(f"--try {t}: {e}")
     combos = list(itertools.product(*options))
-    if len(combos) > 16:
-        sys.exit(f"--try: {len(combos)} combinations - keep it to 16 or fewer")
+    if len(combos) > MAX_RUNS:
+        sys.exit(f"--try: {len(combos)} combinations - keep it to {MAX_RUNS} or fewer (fewer values, or a bigger step)")
+    if len(combos) > 1:
+        print(f"{len(combos)} combinations to run", flush=True)
     out.mkdir(exist_ok=True)
     rows, scan_cache, prepared = [], {}, {}
     for n, combo in enumerate(combos, 1):
@@ -226,7 +260,8 @@ def main(argv=None) -> None:
                          "joined with commas, or 'watchlist' for your config's list (default sp500)")
     ap.add_argument("--max-symbols", type=int, default=800, help="backtest --days: at most this many stocks")
     ap.add_argument("--try", dest="tries", action="append", default=[], metavar="SETTING=A,B",
-                    help="backtest: compare values side by side, e.g. --try swing_n=4,5 --try breakeven_at_r=1,1.5")
+                    help="backtest: compare values side by side, e.g. --try swing_n=4-8 --try breakeven_at_r=1-2:0.5 "
+                         "(lists like 1,1.5 work too)")
     args = ap.parse_args(argv)
 
     _env()

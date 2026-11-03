@@ -201,3 +201,24 @@ def test_one_symbol_is_watched_every_day_without_a_scan(tmp_path):
     from swingbot import __main__ as m
     m._compare(hist, cfg, ["swing_n=4,5"], tmp_path, forced=["S03"])
     assert (pd.read_csv(tmp_path / "compare.csv", index_col=0).trades > 0).all()
+
+
+
+def test_try_ranges():
+    from swingbot.__main__ import try_values
+    assert try_values("4-8") == [4, 5, 6, 7, 8]
+    assert try_values("1-2:0.25") == [1.0, 1.25, 1.5, 1.75, 2.0]
+    assert try_values("0.25-0.5/0.05") == [0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+    assert try_values("2,4-6,6") == [2, 4, 5, 6]
+    assert try_values("1,1.5") == [1, 1.5] and try_values("true,false") == [True, False]
+    for bad in ("1-2.5", "8-4", "1-2:0", "1-1000"):
+        with pytest.raises(ValueError):
+            try_values(bad)
+
+
+def test_try_range_runs_every_value(tmp_path):
+    from swingbot import __main__ as m
+    hist = _hist(6, 10)
+    m._compare(hist, Config(min_avg_dollar_volume=0), ["swing_n=3-5", "breakeven_at_r=1-1.5:0.5"], tmp_path)
+    table = pd.read_csv(tmp_path / "compare.csv", index_col=0)
+    assert len(table) == 6 and "swing_n=4, breakeven_at_r=1.5" in table.index

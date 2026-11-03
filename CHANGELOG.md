@@ -1,8 +1,14 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.12.1 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.13.0 - 2026-11-03
+
+- **Ranges in `--try`:** `--try swing_n=4-8` tries 4, 5, 6, 7 and 8; `--try breakeven_at_r=1-2:0.25` tries
+  1, 1.25, 1.5, 1.75 and 2 (decimals need a step); lists and ranges mix (`2,4-6`).
+- Up to 64 combinations per comparison (was 16); the number is shown before it starts.
 
 ## v1.12.1 - 2026-11-03
 
