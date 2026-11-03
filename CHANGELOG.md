@@ -4,7 +4,7 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.10.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
-## Unreleased
+## v1.11.0 - 2026-11-03
 
 - **Midday rescan** (`midday_rescan_time`, default 12:45 ET): the bot rescans with today's bars at midday.
   If a trade is open, the rescan waits until it closes, as long as that is before `midday_rescan_by`
