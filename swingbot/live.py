@@ -120,6 +120,8 @@ class Bot:
         self.views: dict[str, dict] = {}               # chart data per watched symbol (dashboard)
         self.watch_info: dict[str, dict] = {}          # latest price / nearest line per watched symbol
         self.pending_rescan = False                    # "Rescan" pressed on the dashboard
+        self.midday_done = False                       # today's automatic midday rescan has run (or was dropped)
+        self.midday_waiting = False                    # midday rescan is due but waits for the open trade to close
         self.cfg0 = dataclasses.replace(cfg)           # config.yaml as loaded (today's changes are compared to it)
         self.overrides: dict[str, float] = {}          # settings changed on the dashboard, for the rest of today
         self.pending_settings: dict[str, float] = {}
@@ -429,6 +431,35 @@ class Bot:
         log.info("Dashboard: rescan requested")
         return "Rescanning with today's prices..."
 
+    def check_midday_rescan(self, now: datetime | None = None) -> None:
+        """Automatic rescan at midday_rescan_time. In a trade it waits until the trade closes, and is
+        dropped if that is not before midday_rescan_by. Runs at most once a day."""
+        c = self.cfg
+        if self.midday_done or not str(c.midday_rescan_time or "").strip():
+            return
+        t = (now or now_et()).time()
+        if t < _t(c.midday_rescan_time):
+            return
+        why = None
+        if t >= _t(c.midday_rescan_by):
+            why = f"the trade was still open at {c.midday_rescan_by}" if self.midday_waiting else f"it is past {c.midday_rescan_by}"
+        elif self.forced_symbol:
+            why = "trading only the symbol given with --symbol"
+        elif self.halted or self.trades_today >= c.max_trades_per_day:
+            why = "no more entries today"
+        elif self.pos:
+            if not self.midday_waiting:
+                self.midday_waiting = True
+                log.info("Midday rescan due - waiting until the current trade closes (if before %s)", c.midday_rescan_by)
+            return
+        self.midday_done, self.midday_waiting = True, False
+        if why:
+            log.info("Midday rescan skipped: %s", why)
+            return
+        log.info("Midday rescan starting")
+        self.pending_rescan = True
+        self.save_state()
+
     def rescan(self) -> bool:
         """Rank the watchlist again, this time including today's completed bars, and watch the new
         best symbols. Only when flat. Returns True if the watch list changed."""
@@ -597,7 +628,7 @@ class Bot:
                       settled_start=self.settled_start, spent_today=self.spent_today,
                       trades_today=self.trades_today, halted=self.halted, paper_pnl=self.paper_pnl,
                       closed=self.closed, pos=p, my_order_ids=sorted(map(str, self.my_order_ids)),
-                      overrides=self.overrides,
+                      overrides=self.overrides, midday_done=self.midday_done,
                       last_bar_seen=self.last_bar_seen.isoformat() if self.last_bar_seen is not None else None,
                       extra=self._extra_state())
             path = self._state_path()
@@ -666,6 +697,7 @@ class Bot:
         self.halted = bool(st.get("halted"))
         self.paper_pnl = float(st.get("paper_pnl") or 0)
         self.closed = list(st.get("closed") or [])
+        self.midday_done = bool(st.get("midday_done"))
         for key, v in (st.get("overrides") or {}).items():       # today's dashboard changes still apply
             if key in self.ADJUSTABLE:
                 self._apply_setting(key, float(v), announce=False)
@@ -1649,7 +1681,8 @@ class Bot:
 
     def _auto_state(self) -> str:
         if self.pos:
-            return f"In a {'short ' if self._is_short() else ''}trade - stop {self.pos['stop']:.2f}"
+            return (f"In a {'short ' if self._is_short() else ''}trade - stop {self.pos['stop']:.2f}"
+                    + (" (rescan after it closes)" if self.midday_waiting else ""))
         if self.halted:
             return "Loss limit hit - watching only"
         if self.trades_today >= self.cfg.max_trades_per_day:
@@ -1754,6 +1787,7 @@ class Bot:
                     self.publish(f"Loading {self.bm}-minute bars")
                 if self.apply_pending_settings():
                     self.publish()
+                self.check_midday_rescan(now)
                 if self.pending_rescan:
                     self.rescan()
                 self.step()

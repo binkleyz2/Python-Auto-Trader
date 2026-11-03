@@ -62,6 +62,8 @@ reward_risk: 2.0
 first_entry_time: "09:45"
 last_entry_time: "15:30"
 flatten_time: "15:50"
+midday_rescan_time: "12:45"   # rescan with today's bars ("" = off); in a trade it waits for the trade to close
+midday_rescan_by: "15:00"     # ...but only if that is before this time
 max_trades_per_day: 4
 
 # Risk

@@ -62,6 +62,8 @@ class Config:
     last_entry_time: str = "15:30"
     flatten_time: str = "15:50"           # sell everything at/after this time (ET)
     max_trades_per_day: int = 2
+    midday_rescan_time: str = "12:45"     # rescan with today's bars at this time ET ("" = off); in a trade: after it closes
+    midday_rescan_by: str = "15:00"       # ...but only before this time ET
 
     # --- Risk --------------------------------------------------------------------
     risk_per_trade_pct: float = 0.5       # % of equity risked per trade (entry-to-stop)
@@ -99,6 +101,16 @@ class Config:
             raise ValueError(f"watch_count must be 1 to 20, not {self.watch_count!r}")
         if not 0 <= float(self.min_stop_pct) < 20:
             raise ValueError(f"min_stop_pct must be 0 to 20, not {self.min_stop_pct!r}")
+        for key in ("midday_rescan_time", "midday_rescan_by"):
+            v = str(getattr(self, key) or "").strip()
+            if key == "midday_rescan_time" and not v:
+                continue
+            try:
+                hh, mm = v.split(":")
+                if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+                    raise ValueError
+            except ValueError:
+                raise ValueError(f"{key} must be a time like \"12:45\", not {getattr(self, key)!r}") from None
         if not 1 <= int(self.scan_workers) <= 32:
             raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
         if self.email_report and not str(self.email_to).strip():
