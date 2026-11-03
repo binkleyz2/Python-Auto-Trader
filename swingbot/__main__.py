@@ -73,7 +73,9 @@ def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
     if not os.environ.get("ALPACA_API_KEY") or not os.environ.get("ALPACA_SECRET_KEY"):
         sys.exit("Backtests with --days use Alpaca's history: set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env "
                  "(paper keys are fine).")
-    if args.universe.strip().lower() == "watchlist":
+    if args.symbol:                                    # --symbol AAPL (or AAPL,MSFT): just those
+        syms = [x.strip().upper() for x in args.symbol.split(",") if x.strip()]
+    elif args.universe.strip().lower() == "watchlist":
         syms = list(dict.fromkeys(s.upper() for s in cfg.watchlist))
         if cfg.watchlist_indexes:
             from .indexes import daily_watchlist
@@ -104,7 +106,11 @@ def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
     return hist
 
 
-def _compare(hist: dict, cfg: Config, tries: list[str], out: Path) -> None:
+def _forced(args) -> list[str] | None:
+    return [x.strip().upper() for x in args.symbol.split(",") if x.strip()] if getattr(args, "symbol", None) else None
+
+
+def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None) -> None:
     """Run the backtest for every combination of the --try values and print them side by side."""
     import dataclasses
     import itertools
@@ -139,7 +145,8 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path) -> None:
         pk = (c.swing_n, c.atr_period, c.direction != "long")
         if pk not in prepared:
             prepared[pk] = bt.prepare(hist, c)
-        trades, curve, _ = bt.run(hist, c, scan_cache=scan_cache, prepared=prepared[pk], progress=_progress("days"))
+        trades, curve, _ = bt.run(hist, c, scan_cache=scan_cache, prepared=prepared[pk], progress=_progress("days"),
+                                  forced=forced)
         s = bt.summarize(trades, curve, c)
         tag = "-".join(f"{k}{v if v != '' else 'off'}" for k, v in combo).replace(" ", "").replace(":", "")
         trades.to_csv(out / f"trades-{tag}.csv", index=False)
@@ -210,7 +217,8 @@ def main(argv=None) -> None:
     ap.add_argument("--out", default="backtests")
     ap.add_argument("--live", action="store_true", help="send REAL orders")
     ap.add_argument("--bars", type=int, help="bar size in minutes for this run (overrides bar_minutes)")
-    ap.add_argument("--symbol", help="skip the morning scan and trade this symbol (or contract) only")
+    ap.add_argument("--symbol", help="skip the morning scan and trade this symbol (or contract) only; "
+                                     "backtest: e.g. NVDA or NVDA,AMD, watched every day")
     ap.add_argument("--yes", action="store_true", help="skip the live confirmation prompt (for schedulers)")
     ap.add_argument("--days", type=int, help="backtest: this many calendar days of Alpaca history (e.g. 120)")
     ap.add_argument("--universe", default="sp500",
@@ -248,10 +256,10 @@ def main(argv=None) -> None:
             if not hist:
                 sys.exit(f"No CSVs for the watchlist found in {args.data}/ (or use --days 120 for Alpaca's history)")
         if args.tries:
-            _compare(hist, cfg, args.tries, Path(args.out))
+            _compare(hist, cfg, args.tries, Path(args.out), _forced(args))
             return
         print(f"Backtesting {len(hist)} stocks...", flush=True)
-        trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"))
+        trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args))
         out = Path(args.out)
         out.mkdir(exist_ok=True)
         trades.to_csv(out / "trades.csv", index=False)

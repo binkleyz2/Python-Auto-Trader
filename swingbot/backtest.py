@@ -210,10 +210,11 @@ def prepare(history: dict[str, pd.DataFrame], cfg: Config) -> dict:
 
 
 def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, warmup_days: int = 3,
-        progress=None, scan_cache: dict | None = None, prepared: dict | None = None
-        ) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
+        progress=None, scan_cache: dict | None = None, prepared: dict | None = None,
+        forced: list[str] | None = None) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
     """Returns (trades, end-of-day equity curve, daily scan log). ``scan_cache`` lets several runs with
-    settings that don't change the scan (stops, targets, trades per day...) share the daily rankings."""
+    settings that don't change the scan (stops, targets, trades per day...) share the daily rankings.
+    ``forced`` = watch these symbols every day without a scan or a midday rescan (live: run --symbol)."""
     prepared = prepared if prepared is not None else prepare(history, cfg)
     all_days = sorted(set().union(*[set(p[3]) for p in prepared.values()])) if prepared else []
     equity = cfg.starting_equity
@@ -226,7 +227,9 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
             continue
         window_start = all_days[max(0, k - lookback_days)]
         ck = (key, day)
-        if scan_cache is not None and ck in scan_cache:
+        if forced:
+            ranked = [(f, 0.0, "chosen by you", "") for f in forced if f in prepared]
+        elif scan_cache is not None and ck in scan_cache:
             ranked = scan_cache[ck]
         else:
             prior, pre = {}, {}
@@ -283,7 +286,8 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
             pick["midday"] = dict(time=ts.strftime("%H:%M"), watched=new)
             return sessions_for(new)
 
-        for tr in simulate_watch(sessions_for([w[0] for w in watched]), equity, cfg, rescan=midday):
+        for tr in simulate_watch(sessions_for([w[0] for w in watched]), equity, cfg,
+                                 rescan=None if forced else midday):
             equity += tr.pnl
             trades.append(tr)
         curve[pd.Timestamp(day)] = equity

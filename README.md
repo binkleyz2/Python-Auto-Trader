@@ -237,7 +237,7 @@ py -m swingbot backtest --days 120
 ```
 
 - **What it tests:** your `config.yaml` exactly as the live bot uses it. Each day it ranks the stocks on the days before (the morning scan), watches the best `watch_count`, ranks again at `midday_rescan_time` with that day's bars so far, takes the first signal among them, one position at a time, up to `max_trades_per_day` and the daily loss limit, and sells at 15:50. Entries fill at the next bar's open plus `slippage_pct`; inside a bar the stop is assumed to fill before the target.
-- **Which stocks:** `--universe sp500` (the default), or any of `sp500, nasdaq100, dow, russell2000, nasdaq` joined with commas, or `watchlist` for your own list and `watchlist_indexes`. At most 800 stocks (`--max-symbols`): months of bars for thousands of stocks need a lot of memory.
+- **Which stocks:** `--symbol NVDA` (or `NVDA,AMD`) trades just those, every day, with no scan (like `run --symbol`); otherwise `--universe sp500` (the default), or any of `sp500, nasdaq100, dow, russell2000, nasdaq` joined with commas, or `watchlist` for your own list and `watchlist_indexes`. At most 800 stocks (`--max-symbols`): months of bars for thousands of stocks need a lot of memory.
 - **Time:** the first run downloads the bars (a few minutes for 500 stocks) into `data/`; later runs only fetch new days. The test itself takes about a minute or two per run for 500 stocks and 3 months.
 - **Results** (in `backtests/`): `report.txt` with the totals (win rate, average R, profit factor, return, largest drawdown) and the same split **by setup** (long/short bounce and breakout/breakdown), **by scan** (morning picks or midday rescan), **by entry hour**, **by exit** and **by month**; every trade in `trades.csv`; the equity curve in `equity.csv`.
 

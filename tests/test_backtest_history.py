@@ -188,3 +188,16 @@ def test_try_keeps_times_as_text_and_understands_off(tmp_path):
     table = pd.read_csv(tmp_path / "compare.csv", index_col=0)
     assert list(table.index) == ["midday_rescan_time=12:45", "midday_rescan_time=off"]
     assert (tmp_path / "report-midday_rescan_time1245.txt").exists()          # no ":" in Windows file names
+
+
+
+def test_one_symbol_is_watched_every_day_without_a_scan(tmp_path):
+    hist = _hist(6, 14)
+    cfg = Config(direction="both", min_avg_dollar_volume=1e12, max_trades_per_day=5)   # the scan would pick nothing
+    assert bt.run(hist, cfg)[0].empty
+    trades, _, picks = bt.run(hist, cfg, forced=["S03"])
+    assert len(trades) and set(trades.symbol) == {"S03"} and (trades.scan == "morning").all()
+    assert all(p["watched"] == ["S03"] for p in picks)
+    from swingbot import __main__ as m
+    m._compare(hist, cfg, ["swing_n=4,5"], tmp_path, forced=["S03"])
+    assert (pd.read_csv(tmp_path / "compare.csv", index_col=0).trades > 0).all()

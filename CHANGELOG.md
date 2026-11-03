@@ -1,8 +1,14 @@
 # Changelog
 
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
-first line of the log ("swingbot v1.12.0 | Mode: ...") and next to the symbol on the dashboard;
+first line of the log ("swingbot v1.12.1 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+
+## v1.12.1 - 2026-11-03
+
+- **Backtest one stock (or a few):** `py -m swingbot backtest --days 180 --symbol NVDA` trades just NVDA
+  every day, with no scan and no midday rescan, like `run --symbol`. Several: `--symbol NVDA,AMD`.
+  Works with `--try`.
 
 ## v1.12.0 - 2026-11-03
 
