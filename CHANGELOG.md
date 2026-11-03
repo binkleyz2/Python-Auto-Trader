@@ -3,6 +3,9 @@
 Newest first. Each version is also a tagged release on GitHub. The running bot shows its version on the
 first line of the log ("swingbot v1.10.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
+## v.1.10.1 - 2026-11-03
+
+- Faster backtests (about 30%), same results
 
 ## v1.10.0 – 2026-11-02
 
