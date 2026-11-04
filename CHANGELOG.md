@@ -4,6 +4,14 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.16.0 - 2026-11-03
+
+- **Backtest results in Excel, with line charts.** A run adds `backtest.xlsx` (Summary with the account value
+  chart and breakdown tables, Equity by day, Trades). A `--try` comparison adds `compare.xlsx` (the table
+  with the best net shaded, one chart line per combination - the 10 best by net when there are more -
+  Equity by day per combination, and all trades with their settings). CSVs are still written, and
+  everything goes into the run's zip in `backtests/Results/`.
+
 ## v1.15.1 - 2026-11-03
 
 - Backtest zips now go to `backtests/Results/` (was `results/`), and the run's files are **moved** into the

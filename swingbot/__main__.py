@@ -211,6 +211,16 @@ def _archive(files: list[Path], cfg: Config, args, workdir: Path, now=None) -> P
         return None
 
 
+def _excel(write, path: Path) -> bool:
+    """Write an Excel copy of the results (with charts); the CSVs are kept either way."""
+    try:
+        write(path)
+        return True
+    except Exception as e:
+        print(f"(No Excel file this time - {e}. The CSV files have everything.)")
+        return False
+
+
 def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None,
              steps: list[str] | None = None) -> list[Path]:
     """Run the backtest for every combination of the --try values and print them side by side.
@@ -251,7 +261,7 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
     if len(combos) > 1:
         print(f"{len(combos)} combinations to run", flush=True)
     out.mkdir(exist_ok=True)
-    rows, scan_cache, prepared, written = [], {}, {}, []
+    rows, scan_cache, prepared, written, curves, run_trades = [], {}, {}, [], {}, {}
     for n, combo in enumerate(combos, 1):
         c = dataclasses.replace(cfg, **dict(combo))
         try:
@@ -270,6 +280,7 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         trades.to_csv(out / f"trades-{tag}.csv", index=False)
         (out / f"report-{tag}.txt").write_text(bt.report_text(trades, curve, c, label) + "\n", encoding="utf-8")
         written += [out / f"report-{tag}.txt", out / f"trades-{tag}.csv"]
+        curves[label], run_trades[label] = curve, trades
         rows.append({"settings": label, "trades": s.get("trades", 0), "win %": s.get("win_rate_pct"),
                      "avg R": s.get("avg_r"), "profit factor": s.get("profit_factor"), "net $": s.get("net_pnl"),
                      "return %": s.get("return_pct"), "max drawdown %": s.get("max_drawdown_pct")})
@@ -277,10 +288,12 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
     table = pd.DataFrame(rows).set_index("settings")
     table.to_csv(out / "compare.csv")
     (out / "compare.txt").write_text(table.to_string() + "\n", encoding="utf-8")
+    from .backtest_xlsx import compare_workbook
+    excel = _excel(lambda p: compare_workbook(p, table, curves, run_trades, cfg), out / "compare.xlsx")
     print("\n" + table.to_string())
     if not cfg.backtest_results_dir:
         print(f"\nEach run's trades and full report are in {out}/ (compare.csv, report-*.txt, trades-*.csv)")
-    return [out / "compare.txt", out / "compare.csv"] + written
+    return ([out / "compare.xlsx"] if excel else []) + [out / "compare.txt", out / "compare.csv"] + written
 
 
 def _logging(workdir: Path) -> None:
@@ -396,14 +409,17 @@ def main(argv=None) -> None:
         trades.to_csv(out / "trades.csv", index=False)
         curve.to_csv(out / "equity.csv")
         (out / "picks.json").write_text(json.dumps(picks, indent=1), encoding="utf-8")
-        text = bt.report_text(trades, curve, cfg, f"Backtest with your config.yaml settings ({len(hist)} stocks)")
+        title = f"Backtest with your config.yaml settings ({len(hist)} stocks)"
+        text = bt.report_text(trades, curve, cfg, title)
         (out / "report.txt").write_text(text + "\n", encoding="utf-8")
+        from .backtest_xlsx import run_workbook
+        excel = _excel(lambda p: run_workbook(p, trades, curve, cfg, title), out / "backtest.xlsx")
         print("\n" + text)
-        if args.command == "backtest" and (kept := _archive(
-                [out / n for n in ("report.txt", "trades.csv", "equity.csv", "picks.json")], cfg, args, workdir)):
-            print(f"\nSaved as {kept} (report.txt, trades.csv, equity.csv, picks.json)")
+        names = (["backtest.xlsx"] if excel else []) + ["report.txt", "trades.csv", "equity.csv", "picks.json"]
+        if args.command == "backtest" and (kept := _archive([out / n for n in names], cfg, args, workdir)):
+            print(f"\nSaved as {kept} ({', '.join(names)})")
         else:
-            print(f"\nDetails saved in {out}/ (report.txt, trades.csv, equity.csv, picks.json)")
+            print(f"\nDetails saved in {out}/ ({', '.join(names)})")
         return
 
     from .live import is_weekday, wait_for_open

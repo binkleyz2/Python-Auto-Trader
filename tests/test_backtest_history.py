@@ -260,6 +260,27 @@ def test_each_run_is_kept_as_a_zip(tmp_path, monkeypatch):
     assert first.parent == tmp_path / "backtests" / "Results" and first != second and second.exists()
     assert first.name == "2026-11-03_193005-S01-180d-swing_n=4-5-step0.5.zip"
     names = zipfile.ZipFile(first).namelist()
-    assert {"run.txt", "config.yaml", "compare.txt", "compare.csv", "report-swing_n4.txt", "trades-swing_n5.csv"} <= set(names)
+    assert {"run.txt", "config.yaml", "compare.xlsx", "compare.txt", "compare.csv", "report-swing_n4.txt",
+            "trades-swing_n5.csv"} <= set(names)
     assert "--try swing_n=4-5" in zipfile.ZipFile(first).read("run.txt").decode()
     assert m._archive(files, Config(backtest_results_dir=""), args, tmp_path) is None
+
+
+def test_excel_results_with_line_charts(tmp_path):
+    import openpyxl
+    from swingbot import __main__ as m
+    from swingbot.backtest_xlsx import run_workbook, CHART_LINES
+    hist = {f"S{i:02d}": synthetic(f"S{i:02d}", days=20, seed=i) for i in range(6)}
+    cfg = Config(min_avg_dollar_volume=0, direction="both")
+    trades, curve, _ = bt.run(hist, cfg)
+    wb = openpyxl.load_workbook(run_workbook(tmp_path / "backtest.xlsx", trades, curve, cfg, "one run"))
+    assert wb.sheetnames == ["Summary", "Equity", "Trades"]
+    assert len(wb["Summary"]._charts) == 1 and wb["Equity"].max_row == len(curve) + 1
+    assert wb["Trades"].max_row == len(trades) + 1 and wb["Trades"]["P1"].value == "P&L"
+    files = m._compare(hist, cfg, ["swing_n=3-5", "breakeven_at_r=1-2"], tmp_path / "c", steps=["0.25"])  # 15 runs
+    assert files[0].name == "compare.xlsx" and (tmp_path / "c" / "compare.csv").exists()   # CSVs kept too
+    wb = openpyxl.load_workbook(files[0])
+    chart = wb["Compare"]._charts[0]
+    assert len(chart.series) == CHART_LINES                     # only the best 10 of 15 drawn...
+    assert wb["Equity"].max_column == 16                        # ...but every combination is on the Equity tab
+    assert wb["Trades"]["A1"].value == "Settings" and wb["Trades"].max_row > 1
