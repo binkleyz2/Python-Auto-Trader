@@ -4,6 +4,11 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.16.1 - 2026-11-03
+
+- `compare.xlsx` opens in Excel without the "We found a problem... repaired records: View" message (the
+  Compare tab had a leftover frozen-pane setting).
+
 ## v1.16.0 - 2026-11-03
 
 - **Backtest results in Excel, with line charts.** A run adds `backtest.xlsx` (Summary with the account value

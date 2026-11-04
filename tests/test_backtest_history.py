@@ -284,3 +284,22 @@ def test_excel_results_with_line_charts(tmp_path):
     assert len(chart.series) == CHART_LINES                     # only the best 10 of 15 drawn...
     assert wb["Equity"].max_column == 16                        # ...but every combination is on the Equity tab
     assert wb["Trades"]["A1"].value == "Settings" and wb["Trades"].max_row > 1
+
+
+def test_excel_files_open_without_repairs(tmp_path):
+    """Excel 'repairs' a sheet whose selection points at a frozen pane that isn't there."""
+    import re
+    import zipfile
+    from swingbot import __main__ as m
+    from swingbot.backtest_xlsx import run_workbook
+    hist = {f"S{i:02d}": synthetic(f"S{i:02d}", days=12, seed=i) for i in range(4)}
+    cfg = Config(min_avg_dollar_volume=0)
+    trades, curve, _ = bt.run(hist, cfg)
+    books = [run_workbook(tmp_path / "backtest.xlsx", trades, curve, cfg, "one run"),
+             m._compare(hist, cfg, ["swing_n=4,5"], tmp_path / "c")[0]]
+    for book in books:
+        z = zipfile.ZipFile(book)
+        for name in [n for n in z.namelist() if n.startswith("xl/worksheets/sheet")]:
+            view = re.search(r"<sheetView.*?</sheetView>|<sheetView[^>]*/>", z.read(name).decode()).group(0)
+            if 'pane="' in view:
+                assert "<pane " in view, f"{book.name} {name}: {view}"

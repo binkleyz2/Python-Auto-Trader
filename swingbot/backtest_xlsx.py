@@ -35,14 +35,15 @@ def _styles():
                 center=Alignment(horizontal="center", vertical="center", wrap_text=True))
 
 
-def _header(ws, row: int, cols: list[tuple[str, float]], st) -> None:
+def _header(ws, row: int, cols: list[tuple[str, float]], st, freeze: bool = True) -> None:
     from openpyxl.utils import get_column_letter
     for i, (name, width) in enumerate(cols, 1):
         c = ws.cell(row=row, column=i, value=name)
         c.font, c.fill, c.border, c.alignment = st["bold"], st["fill"], st["line"], st["center"]
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.row_dimensions[row].height = 30
-    ws.freeze_panes = ws.cell(row=row + 1, column=1)
+    if freeze:                     # (setting it and then clearing it leaves a broken view that Excel "repairs")
+        ws.freeze_panes = ws.cell(row=row + 1, column=1)
 
 
 def _cell(ws, row, col, value, fmt=None, font=None):
@@ -178,8 +179,7 @@ def compare_workbook(path: Path, table: pd.DataFrame, curves: dict[str, pd.Serie
     fmts = {"trades": "0", "win %": PCT, "avg R": "+0.00;[Red]-0.00", "profit factor": "0.00", "net $": USD,
             "return %": PCT, "max drawdown %": PCT}
     cols = list(table.columns)
-    _header(C, 4, [("Settings", 34)] + [(c, 13) for c in cols], st)
-    C.freeze_panes = None
+    _header(C, 4, [("Settings", 34)] + [(c, 13) for c in cols], st, freeze=False)
     best = table["net $"].astype(float).idxmax() if "net $" in table and table["net $"].notna().any() else None
     good = PatternFill("solid", fgColor="DDEFD9")
     for r, lab in enumerate(labels, 5):
