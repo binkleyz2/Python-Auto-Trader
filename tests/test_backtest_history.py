@@ -329,3 +329,30 @@ def test_interactive_charts(tmp_path):
     assert files[0].name == "compare-chart.html"
     data = json.loads(re.search(r"const D = (\{.*?\});\n", files[0].read_text(encoding="utf-8")).group(1))
     assert len(data["series"]) == 15 and sum(s["on"] for s in data["series"]) == BEST
+
+
+def test_download_command_fills_the_cache_in_chunks(tmp_path, monkeypatch, capsys):
+    from swingbot import __main__ as m
+    from swingbot import history_data
+    calls = []
+
+    def fake_load(client, syms, days, folder, minutes=5, **kw):
+        calls.append(list(syms))
+        folder.mkdir(parents=True, exist_ok=True)
+        for s in syms:
+            if s != "NODATA":
+                (folder / f"{s}.csv.gz").write_bytes(b"x" * 1000)
+        return {s: None for s in syms if s != "NODATA"}
+
+    monkeypatch.setattr(m, "_data_client", lambda: object())
+    monkeypatch.setattr(history_data, "load_history", fake_load)
+    monkeypatch.setattr(m, "DOWNLOAD_CHUNK", 3)
+    syms = ",".join([f"S{i}" for i in range(7)] + ["NODATA"])
+    args = SimpleNamespace(days=180, symbol=syms, universe="sp500", max_symbols=2)   # no cap for downloads
+    m._download(Config(), args, tmp_path)
+    assert [len(c) for c in calls] == [3, 3, 2]                     # held in memory a chunk at a time
+    out = capsys.readouterr().out
+    assert "8 of 8 stocks done" in out and "Done: 7 of 8 stocks" in out and "1 had none" in out
+    assert len(list((tmp_path / "data" / "alpaca-5min").glob("*.csv.gz"))) == 7
+    with pytest.raises(SystemExit):
+        m._download(Config(), SimpleNamespace(days=None, symbol="A", universe="sp500"), tmp_path)

@@ -4,6 +4,12 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.19.0 - 2026-11-03
+
+- **`download` command:** `py -m swingbot download --days 180 --universe sp500,dow,nasdaq100,nasdaq,russell2000`
+  saves Alpaca history for whole indexes into the backtest cache without running a backtest. 100 stocks at a
+  time (low memory, no 800-stock cap), skips stocks already up to date, and can be stopped and rerun to carry on.
+
 ## v1.18.0 - 2026-11-03
 
 - **Interactive backtest chart:** `backtest-chart.html` / `compare-chart.html` in each run's zip. Opens in any

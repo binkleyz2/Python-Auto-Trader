@@ -2,6 +2,7 @@
 
   demo                      backtest on SYNTHETIC data (checks the code runs; says nothing about real performance)
   backtest --data DIR       backtest on your bar CSVs (same bar size as bar_minutes) (one SYMBOL.csv per stock)
+  download --days 180 --universe sp500,dow   save Alpaca history for backtests (no backtest; resumable)
   fetch --data DIR          save recent 5-minute bars from your broker into DIR (run daily to build history)
   scan                      show this morning's ranking of your watchlist (needs API key)
   run                       trade today's session in DRY RUN (needs API key; no orders sent)
@@ -65,14 +66,16 @@ def _progress(what: str):
     return show
 
 
-def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
-    """Months of 5-minute bars from Alpaca for the backtest (downloaded once, then cached in data/)."""
+def _data_client():
     import os
-    from .config import read_watchlist  # noqa: F401
-    from .history_data import load_history
     if not os.environ.get("ALPACA_API_KEY") or not os.environ.get("ALPACA_SECRET_KEY"):
-        sys.exit("Backtests with --days use Alpaca's history: set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env "
-                 "(paper keys are fine).")
+        sys.exit("History comes from Alpaca: set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env (paper keys are fine).")
+    from alpaca.data.historical import StockHistoricalDataClient
+    return StockHistoricalDataClient(os.environ["ALPACA_API_KEY"], os.environ["ALPACA_SECRET_KEY"])
+
+
+def _symbols(cfg: Config, args, workdir: Path) -> list[str]:
+    """The stocks --symbol / --universe name."""
     if args.symbol:                                    # --symbol AAPL (or AAPL,MSFT): just those
         syms = [x.strip().upper() for x in args.symbol.split(",") if x.strip()]
     elif args.universe.strip().lower() == "watchlist":
@@ -91,12 +94,18 @@ def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
         for n in names:
             syms += index_symbols(n, workdir / "logs" / "indexes", cfg.min_price, fallback_dir=workdir)
         syms = list(dict.fromkeys(syms))
+    return syms
+
+
+def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
+    """Months of 5-minute bars from Alpaca for the backtest (downloaded once, then cached in data/)."""
+    from .history_data import load_history
+    client = _data_client()
+    syms = _symbols(cfg, args, workdir)
     if len(syms) > args.max_symbols:
         print(f"{len(syms)} stocks - using the first {args.max_symbols} (--max-symbols); more stocks need a lot of "
               f"memory and time")
         syms = syms[:args.max_symbols]
-    from alpaca.data.historical import StockHistoricalDataClient
-    client = StockHistoricalDataClient(os.environ["ALPACA_API_KEY"], os.environ["ALPACA_SECRET_KEY"])
     print(f"Getting {args.days} days of {cfg.bar_minutes}-minute bars for {len(syms)} stocks "
           f"(the first time takes a few minutes; later runs only fetch new days)...", flush=True)
     hist = load_history(client, syms, args.days, workdir / "data" / f"alpaca-{cfg.bar_minutes}min", cfg.bar_minutes,
@@ -209,6 +218,41 @@ def _archive(files: list[Path], cfg: Config, args, workdir: Path, now=None) -> P
     except Exception as e:                               # a full disk or locked file shouldn't lose the printout
         print(f"(Couldn't save the run to {cfg.backtest_results_dir}/: {e})")
         return None
+
+
+DOWNLOAD_CHUNK = 100                 # stocks held in memory at once while downloading
+
+
+def _download(cfg: Config, args, workdir: Path) -> None:
+    """Fill the backtest history cache (data/alpaca-<N>min/) for whole indexes, without running a backtest.
+    A chunk of stocks at a time, each saved as it arrives; stocks already up to date are skipped, so it can
+    be stopped and run again to carry on."""
+    import time
+    from .history_data import load_history
+    if not args.days:
+        sys.exit("download needs --days, e.g. py -m swingbot download --days 180 --universe sp500,dow")
+    client = _data_client()
+    syms = _symbols(cfg, args, workdir)
+    folder = workdir / "data" / f"alpaca-{cfg.bar_minutes}min"
+    print(f"Downloading {args.days} days of {cfg.bar_minutes}-minute bars for {len(syms)} stocks into {folder}")
+    print("Stocks that are already up to date are skipped. Stop any time with Ctrl+C; run it again to carry on.",
+          flush=True)
+    got, t0 = 0, time.time()
+    try:
+        for i in range(0, len(syms), DOWNLOAD_CHUNK):
+            chunk = syms[i:i + DOWNLOAD_CHUNK]
+            got += len(load_history(client, chunk, args.days, folder, cfg.bar_minutes))
+            mins = (time.time() - t0) / 60
+            print(f"  {i + len(chunk)} of {len(syms)} stocks done ({mins:.0f} min)", flush=True)
+    except KeyboardInterrupt:
+        print("\nStopped. Everything downloaded so far is saved; run the same command again to carry on.")
+        return
+    size = sum(p.stat().st_size for p in folder.glob("*.csv.gz")) / 1e6
+    print(f"Done: {got} of {len(syms)} stocks have history ({size:,.0f} MB in {folder}).")
+    if got < len(syms):
+        print(f"{len(syms) - got} had none from Alpaca (new listings, funds or delisted stocks); they're tried again "
+              f"next time.")
+    print(f"Backtests of up to {args.days} days on these stocks now start right away.")
 
 
 def _excel(write, path: Path) -> bool:
@@ -349,7 +393,7 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="swingbot", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", action="version", version=f"swingbot {__version__}")
-    ap.add_argument("command", choices=["demo", "backtest", "fetch", "scan", "run"])
+    ap.add_argument("command", choices=["demo", "backtest", "download", "fetch", "scan", "run"])
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--data", default="data")
     ap.add_argument("--out", default="backtests")
@@ -358,9 +402,9 @@ def main(argv=None) -> None:
     ap.add_argument("--symbol", help="skip the morning scan and trade this symbol (or contract) only; "
                                      "backtest: e.g. NVDA or NVDA,AMD, watched every day")
     ap.add_argument("--yes", action="store_true", help="skip the live confirmation prompt (for schedulers)")
-    ap.add_argument("--days", type=int, help="backtest: this many calendar days of Alpaca history (e.g. 120)")
+    ap.add_argument("--days", type=int, help="backtest/download: this many calendar days of Alpaca history (e.g. 120)")
     ap.add_argument("--universe", default="sp500",
-                    help="backtest --days: stocks to test on: index names (sp500, nasdaq100, dow, russell2000, nasdaq) "
+                    help="backtest --days and download: stocks to use: index names (sp500, nasdaq100, dow, russell2000, nasdaq) "
                          "joined with commas, or 'watchlist' for your config's list (default sp500)")
     ap.add_argument("--max-symbols", type=int, default=800, help="backtest --days: at most this many stocks")
     ap.add_argument("--try", dest="tries", action="append", default=[], metavar="SETTING=A,B",
@@ -384,6 +428,10 @@ def main(argv=None) -> None:
     from .data import set_public_rate
     set_public_rate(cfg.public_rate_limit)
     workdir = Path.cwd()
+
+    if args.command == "download":
+        _download(cfg, args, workdir)
+        return
 
     if args.command in ("demo", "backtest"):
         from . import backtest as bt
