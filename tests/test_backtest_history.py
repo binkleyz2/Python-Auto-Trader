@@ -255,8 +255,9 @@ def test_each_run_is_kept_as_a_zip(tmp_path, monkeypatch):
     files = m._compare(hist, cfg, args.tries, tmp_path / "bt", steps=args.steps)
     when = datetime(2026, 11, 3, 19, 30, 5)
     first = m._archive(files, cfg, args, tmp_path, now=when)
+    assert not any(f.exists() for f in files)                       # moved into the zip
     second = m._archive(files, cfg, args, tmp_path, now=when)      # same second: a new name, nothing overwritten
-    assert first.parent == tmp_path / "results" and first != second and second.exists()
+    assert first.parent == tmp_path / "backtests" / "Results" and first != second and second.exists()
     assert first.name == "2026-11-03_193005-S01-180d-swing_n=4-5-step0.5.zip"
     names = zipfile.ZipFile(first).namelist()
     assert {"run.txt", "config.yaml", "compare.txt", "compare.csv", "report-swing_n4.txt", "trades-swing_n5.csv"} <= set(names)

@@ -169,7 +169,8 @@ def _whole(cfg: Config, key: str) -> bool:
 
 def _archive(files: list[Path], cfg: Config, args, workdir: Path, now=None) -> Path | None:
     """Keep this run: its files, the command and the config.yaml used, zipped into
-    <backtest_results_dir>/<date>_<time>-<what was tested>.zip. Never stops the backtest."""
+    <backtest_results_dir>/<date>_<time>-<what was tested>.zip, then the loose files are removed
+    (they're in the zip). Never stops the backtest."""
     import zipfile
     from datetime import datetime
     from . import __version__
@@ -199,6 +200,11 @@ def _archive(files: list[Path], cfg: Config, args, workdir: Path, now=None) -> P
             for f in files:
                 if f.exists():
                     z.write(f, f.name)
+        for f in files:                                  # moved, not copied: they're safely in the zip now
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:
+                pass                                     # open in Excel, say - it just stays behind
         return dest
     except Exception as e:                               # a full disk or locked file shouldn't lose the printout
         print(f"(Couldn't save the run to {cfg.backtest_results_dir}/: {e})")
@@ -272,7 +278,8 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
     table.to_csv(out / "compare.csv")
     (out / "compare.txt").write_text(table.to_string() + "\n", encoding="utf-8")
     print("\n" + table.to_string())
-    print(f"\nEach run's trades and full report are in {out}/ (compare.csv, report-*.txt, trades-*.csv)")
+    if not cfg.backtest_results_dir:
+        print(f"\nEach run's trades and full report are in {out}/ (compare.csv, report-*.txt, trades-*.csv)")
     return [out / "compare.txt", out / "compare.csv"] + written
 
 
@@ -380,7 +387,7 @@ def main(argv=None) -> None:
         if args.tries:
             files = _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps)
             if args.command == "backtest" and (kept := _archive(files, cfg, args, workdir)):
-                print(f"This run is also saved as {kept}")
+                print(f"Saved as {kept}")
             return
         print(f"Backtesting {len(hist)} stocks...", flush=True)
         trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args))
@@ -392,10 +399,11 @@ def main(argv=None) -> None:
         text = bt.report_text(trades, curve, cfg, f"Backtest with your config.yaml settings ({len(hist)} stocks)")
         (out / "report.txt").write_text(text + "\n", encoding="utf-8")
         print("\n" + text)
-        print(f"\nDetails saved in {out}/ (report.txt, trades.csv, equity.csv, picks.json)")
         if args.command == "backtest" and (kept := _archive(
                 [out / n for n in ("report.txt", "trades.csv", "equity.csv", "picks.json")], cfg, args, workdir)):
-            print(f"This run is also saved as {kept}")
+            print(f"\nSaved as {kept} (report.txt, trades.csv, equity.csv, picks.json)")
+        else:
+            print(f"\nDetails saved in {out}/ (report.txt, trades.csv, equity.csv, picks.json)")
         return
 
     from .live import is_weekday, wait_for_open

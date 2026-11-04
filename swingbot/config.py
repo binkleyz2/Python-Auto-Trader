@@ -93,7 +93,7 @@ class Config:
     # --- Backtest only -------------------------------------------------------------
     starting_equity: float = 25_000.0
     slippage_pct: float = 0.02            # % per side
-    backtest_results_dir: str = "results"  # every backtest run is also saved here as its own zip (blank = off)
+    backtest_results_dir: str = "backtests/Results"  # each backtest run is moved here as its own zip (blank = off)
 
     def validate(self) -> None:
         if float(self.breakeven_at_r) < 0:

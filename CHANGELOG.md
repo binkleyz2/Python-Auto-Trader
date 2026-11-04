@@ -4,6 +4,12 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.15.1 - 2026-11-03
+
+- Backtest zips now go to `backtests/Results/` (was `results/`), and the run's files are **moved** into the
+  zip instead of copied, so `backtests/` no longer fills up with loose reports. `backtest_results_dir`
+  still changes the folder; blank leaves the files loose as before.
+
 ## v1.15.0 - 2026-11-03
 
 - **Every backtest run is kept:** each `backtest` is also zipped into `results/` as

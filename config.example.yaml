@@ -94,4 +94,4 @@ smtp_port: 587
 # Backtest
 starting_equity: 25000
 slippage_pct: 0.02
-backtest_results_dir: results  # each backtest run is also kept here as a dated zip (blank = don't keep them)
+backtest_results_dir: backtests/Results  # each run's files are zipped and moved here (blank = leave them loose in backtests/)
