@@ -241,3 +241,24 @@ def test_step_switch(tmp_path, capsys):
     for bad in (["swing_n=0.5"], ["0"], ["nonsense=1"], ["x"]):
         with pytest.raises(SystemExit):
             _compare(hist, cfg, ["swing_n=4-5"], tmp_path, steps=bad)
+
+
+def test_each_run_is_kept_as_a_zip(tmp_path, monkeypatch):
+    import zipfile
+    from swingbot import __main__ as m
+    hist = {f"S{i:02d}": synthetic(f"S{i:02d}", days=12, seed=i) for i in range(3)}
+    cfg = Config(min_avg_dollar_volume=0)
+    (tmp_path / "config.yaml").write_text("swing_n: 5\n", encoding="utf-8")
+    monkeypatch.setattr(m.sys, "argv", ["swingbot", "backtest", "--symbol", "S01", "--try", "swing_n=4-5"])
+    args = SimpleNamespace(symbol="S01", universe="sp500", days=180, tries=["swing_n=4-5"], steps=["0.5"],
+                           config=str(tmp_path / "config.yaml"))
+    files = m._compare(hist, cfg, args.tries, tmp_path / "bt", steps=args.steps)
+    when = datetime(2026, 11, 3, 19, 30, 5)
+    first = m._archive(files, cfg, args, tmp_path, now=when)
+    second = m._archive(files, cfg, args, tmp_path, now=when)      # same second: a new name, nothing overwritten
+    assert first.parent == tmp_path / "results" and first != second and second.exists()
+    assert first.name == "2026-11-03_193005-S01-180d-swing_n=4-5-step0.5.zip"
+    names = zipfile.ZipFile(first).namelist()
+    assert {"run.txt", "config.yaml", "compare.txt", "compare.csv", "report-swing_n4.txt", "trades-swing_n5.csv"} <= set(names)
+    assert "--try swing_n=4-5" in zipfile.ZipFile(first).read("run.txt").decode()
+    assert m._archive(files, Config(backtest_results_dir=""), args, tmp_path) is None

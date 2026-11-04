@@ -167,9 +167,48 @@ def _whole(cfg: Config, key: str) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def _archive(files: list[Path], cfg: Config, args, workdir: Path, now=None) -> Path | None:
+    """Keep this run: its files, the command and the config.yaml used, zipped into
+    <backtest_results_dir>/<date>_<time>-<what was tested>.zip. Never stops the backtest."""
+    import zipfile
+    from datetime import datetime
+    from . import __version__
+    if not cfg.backtest_results_dir:
+        return None
+    try:
+        folder = Path(cfg.backtest_results_dir)
+        folder = folder if folder.is_absolute() else workdir / folder
+        folder.mkdir(parents=True, exist_ok=True)
+        now = now or datetime.now()
+        what = [getattr(args, "symbol", None) or getattr(args, "universe", None) or "csv"]
+        if getattr(args, "days", None):
+            what.append(f"{args.days}d")
+        what += [t.replace(" ", "") for t in getattr(args, "tries", []) or []]
+        what += [f"step{s.replace(' ', '')}" for s in getattr(args, "steps", []) or []]
+        tag = re.sub(r"[^A-Za-z0-9._=,-]+", "_", "-".join(what)).strip("_")[:100]
+        base = f"{now:%Y-%m-%d_%H%M%S}-{tag}"
+        dest, n = folder / f"{base}.zip", 2
+        while dest.exists():
+            dest, n = folder / f"{base}-{n}.zip", n + 1
+        command = "py -m swingbot " + " ".join(a if " " not in a else f'"{a}"' for a in sys.argv[1:])
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("run.txt", f"swingbot {__version__}\n{now:%Y-%m-%d %H:%M:%S}\n{command}\n")
+            conf = Path(getattr(args, "config", "config.yaml"))
+            if conf.exists():
+                z.write(conf, "config.yaml")
+            for f in files:
+                if f.exists():
+                    z.write(f, f.name)
+        return dest
+    except Exception as e:                               # a full disk or locked file shouldn't lose the printout
+        print(f"(Couldn't save the run to {cfg.backtest_results_dir}/: {e})")
+        return None
+
+
 def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None,
-             steps: list[str] | None = None) -> None:
-    """Run the backtest for every combination of the --try values and print them side by side."""
+             steps: list[str] | None = None) -> list[Path]:
+    """Run the backtest for every combination of the --try values and print them side by side.
+    Returns the files it wrote."""
     import dataclasses
     import itertools
     import yaml
@@ -206,7 +245,7 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
     if len(combos) > 1:
         print(f"{len(combos)} combinations to run", flush=True)
     out.mkdir(exist_ok=True)
-    rows, scan_cache, prepared = [], {}, {}
+    rows, scan_cache, prepared, written = [], {}, {}, []
     for n, combo in enumerate(combos, 1):
         c = dataclasses.replace(cfg, **dict(combo))
         try:
@@ -224,14 +263,17 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         tag = "-".join(f"{k}{v if v != '' else 'off'}" for k, v in combo).replace(" ", "").replace(":", "")
         trades.to_csv(out / f"trades-{tag}.csv", index=False)
         (out / f"report-{tag}.txt").write_text(bt.report_text(trades, curve, c, label) + "\n", encoding="utf-8")
+        written += [out / f"report-{tag}.txt", out / f"trades-{tag}.csv"]
         rows.append({"settings": label, "trades": s.get("trades", 0), "win %": s.get("win_rate_pct"),
                      "avg R": s.get("avg_r"), "profit factor": s.get("profit_factor"), "net $": s.get("net_pnl"),
                      "return %": s.get("return_pct"), "max drawdown %": s.get("max_drawdown_pct")})
     import pandas as pd
     table = pd.DataFrame(rows).set_index("settings")
     table.to_csv(out / "compare.csv")
+    (out / "compare.txt").write_text(table.to_string() + "\n", encoding="utf-8")
     print("\n" + table.to_string())
     print(f"\nEach run's trades and full report are in {out}/ (compare.csv, report-*.txt, trades-*.csv)")
+    return [out / "compare.txt", out / "compare.csv"] + written
 
 
 def _logging(workdir: Path) -> None:
@@ -336,7 +378,9 @@ def main(argv=None) -> None:
         if args.steps and not args.tries:
             sys.exit("--step goes with --try, e.g. --try breakeven_at_r=1-2 --step 0.5")
         if args.tries:
-            _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps)
+            files = _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps)
+            if args.command == "backtest" and (kept := _archive(files, cfg, args, workdir)):
+                print(f"This run is also saved as {kept}")
             return
         print(f"Backtesting {len(hist)} stocks...", flush=True)
         trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args))
@@ -349,6 +393,9 @@ def main(argv=None) -> None:
         (out / "report.txt").write_text(text + "\n", encoding="utf-8")
         print("\n" + text)
         print(f"\nDetails saved in {out}/ (report.txt, trades.csv, equity.csv, picks.json)")
+        if args.command == "backtest" and (kept := _archive(
+                [out / n for n in ("report.txt", "trades.csv", "equity.csv", "picks.json")], cfg, args, workdir)):
+            print(f"This run is also saved as {kept}")
         return
 
     from .live import is_weekday, wait_for_open

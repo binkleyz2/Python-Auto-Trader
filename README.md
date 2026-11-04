@@ -240,6 +240,7 @@ py -m swingbot backtest --days 120
 - **Which stocks:** `--symbol NVDA` (or `NVDA,AMD`) trades just those, every day, with no scan (like `run --symbol`); otherwise `--universe sp500` (the default), or any of `sp500, nasdaq100, dow, russell2000, nasdaq` joined with commas, or `watchlist` for your own list and `watchlist_indexes`. At most 800 stocks (`--max-symbols`): months of bars for thousands of stocks need a lot of memory.
 - **Time:** the first run downloads the bars (a few minutes for 500 stocks) into `data/`; later runs only fetch new days. The test itself takes about a minute or two per run for 500 stocks and 3 months.
 - **Results** (in `backtests/`): `report.txt` with the totals (win rate, average R, profit factor, return, largest drawdown) and the same split **by setup** (long/short bounce and breakout/breakdown), **by scan** (morning picks or midday rescan), **by entry hour**, **by exit** and **by month**; every trade in `trades.csv`; the equity curve in `equity.csv`.
+- **Every run is kept:** `backtests/` holds only the latest run, but each `backtest` is also saved as its own zip in `results/`, named by date, time and what was tested (e.g. `results/2026-11-03_193005-STGW-180d-swing_n=4-8-breakeven_at_r=1-2-step0.5.zip`). The zip has that run's reports and trades, plus `run.txt` (the exact command and version) and the `config.yaml` it used, so you can rerun it later. Change the folder with `backtest_results_dir` in `config.yaml`; leave it blank to stop keeping them.
 
 **Comparing settings side by side:**
 

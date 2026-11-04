@@ -4,6 +4,14 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.15.0 - 2026-11-03
+
+- **Every backtest run is kept:** each `backtest` is also zipped into `results/` as
+  `<date>_<time>-<symbol or universe>-<days>-<tries>.zip`, never overwritten. Inside: the reports and trades,
+  `run.txt` (command and version) and the `config.yaml` used. New setting `backtest_results_dir`
+  (default `results`; blank = off). `backtests/` still holds the latest run.
+- `--try` comparisons also save the side-by-side table as `compare.txt`.
+
 ## v1.14.0 - 2026-11-03
 
 - **`--step` switch for `--try` ranges:** `--try breakeven_at_r=1-2 --step 0.5` tries 1, 1.5 and 2.
