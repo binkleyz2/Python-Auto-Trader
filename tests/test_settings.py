@@ -106,3 +106,16 @@ def test_dashboard_setting_endpoint(tmp_path):
         assert code == 200 and "rest of today" in res["message"] and bot.pending_settings == {"target_r": 2.0}
     finally:
         d.stop()
+
+
+def test_trail_settings_greyed_out_when_trailing_is_off(tmp_path):
+    bot = live.Bot(None, Config(trail_stop=False), live=False, workdir=tmp_path)
+    rows = {i.get("key") or i["label"]: i for g in bot.status()["settings"] for i in g["items"]}
+    for k in ("trail_buffer_atr", "Trail step"):
+        assert rows[k]["off"] and "trail_stop is off" in rows[k]["note"]
+    assert not rows["breakeven_at_r"].get("off") and "trailing" not in rows["With no target"]["text"]
+    with pytest.raises(ValueError, match="trailing stop is off"):
+        bot.request_setting("trail_buffer_atr", 0.5)
+    on = live.Bot(None, Config(), live=False, workdir=tmp_path / "on")
+    rows = {i.get("key") or i["label"]: i for g in on.status()["settings"] for i in g["items"]}
+    assert not rows["trail_buffer_atr"].get("off") and "trailing stop" in rows["With no target"]["text"]

@@ -4,6 +4,13 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.19.2 - 2026-11-04
+
+- **Dashboard: trailing-stop settings greyed out when `trail_stop: false`.** "Trail distance from swing
+  points" and "Trail step" are dimmed with "not used - trail_stop is off in config.yaml", and the trail
+  distance can't be changed for today (it would do nothing). The "With no target" / "This trade" lines no
+  longer mention a trailing stop when there isn't one, and use your `flatten_time`.
+
 ## v1.19.1 - 2026-11-04
 
 - **Breakeven stop logged once, not every bar.** When a trade filled between cents (a short at 175.8725),

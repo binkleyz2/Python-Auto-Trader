@@ -98,6 +98,7 @@
   .srow .sl { color: var(--ink-2); font-size: 12px; }
   .srow .sv { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .srow.changed .sv { font-weight: 600; }
+  .srow.off .sl, .srow.off .sv { opacity: 0.45; }
   .srow .sd { color: var(--muted); font-size: 11.5px; }
   .srow input { width: 5.5em; font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
                 border: 1px solid var(--border); border-radius: 6px; padding: 1px 4px; }
@@ -636,12 +637,16 @@ function renderSettings(s) {
     const row = rows[k++]; if (!row) return;
     const v = row.querySelector(".sv"), d = row.querySelector(".sd"), inp = row.querySelector("input");
     row.classList.toggle("changed", !!it.changed);
+    row.classList.toggle("off", !!it.off);
+    row.querySelectorAll("input, button").forEach(x => { x.disabled = !!it.off; });
     if (it.key) {
       if (inp) { if (!inp.dataset.dirty && document.activeElement !== inp) inp.value = it.value; }
       else v.textContent = (it.value === 0 && it.unit.includes("off") ? "off" : it.value + " " + it.unit.split(" (")[0]);
       d.textContent = (it.changed ? `today only · config.yaml: ${it.default}` : "") +
                       ((s.settings_pending || []).includes(it.key) ? " · applying…" : "");
     } else v.textContent = it.text;
+    if (it.note) d.textContent = (d.textContent ? d.textContent + " · " : "") + it.note;
+    else if (!it.key) d.textContent = "";
   }));
 }
 

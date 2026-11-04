@@ -313,6 +313,8 @@ class Bot:
             raise ValueError(f"{spec['label']} must be a number")
         if not spec["min"] <= v <= spec["max"]:
             raise ValueError(f"{spec['label']} must be {spec['min']:g} to {spec['max']:g} {spec['unit']}")
+        if key == "trail_buffer_atr" and not self.cfg.trail_stop:
+            raise ValueError("the trailing stop is off (trail_stop: false in config.yaml), so this has no effect")
         if key in ("breakeven_at_r", "target_r") and 0 < v < 0.5:
             raise ValueError(f"{spec['label']}: 0 (off) or at least 0.5 R")
         with self._bm_lock:
@@ -395,9 +397,12 @@ class Bot:
         profit = [adj("target_r")]
         if self.pos:
             t = self.pos.get("target")
-            profit.append(dict(label="This trade", text=f"target {t:.2f}" if t else "no target - rides the trailing stop"))
+            ride = "rides the trailing stop" if c.trail_stop else f"held until the stop or {c.flatten_time}"
+            profit.append(dict(label="This trade", text=f"target {t:.2f}" if t else f"no target - {ride}"))
         else:
-            profit.append(dict(label="With no target", text="winners run until the trailing stop or 15:50"))
+            profit.append(dict(label="With no target", text=f"winners run until the {'trailing ' if c.trail_stop else ''}"
+                                                            f"stop or {c.flatten_time}"))
+        trail_off = {} if c.trail_stop else dict(off=True, note="not used - trail_stop is off in config.yaml")
         return [
             dict(group="Risk and limits", items=[
                 dict(label="Risk per trade", text=f"{c.risk_per_trade_pct:g}% of the account"),
@@ -409,8 +414,8 @@ class Bot:
             dict(group="Stops", items=[
                 dict(label="Initial stop", text=f"{c.stop_buffer_atr:g} ATR beyond the line; at least {c.min_stop_atr:g} ATR "
                                                 f"and {c.min_stop_pct:g}% from entry; skip if over {c.max_stop_atr:g} ATR"),
-                adj("trail_buffer_atr"),
-                dict(label="Trail step", text=f"moved only by {c.trail_min_step_atr:g} ATR or more"),
+                dict(adj("trail_buffer_atr"), **trail_off),
+                dict(label="Trail step", text=f"moved only by {c.trail_min_step_atr:g} ATR or more", **trail_off),
                 adj("breakeven_at_r")]),
             dict(group="Profit", items=profit),
             dict(group="Timing", items=[
