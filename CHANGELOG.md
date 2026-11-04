@@ -4,6 +4,12 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.17.0 - 2026-11-03
+
+- **Data labels on the backtest charts:** every point shows that day's account value (whole dollars, 7 pt,
+  above the line) in `backtest.xlsx` and `compare.xlsx`. Charts get wider with more days (up to 120 cm) so
+  the labels have room.
+
 ## v1.16.1 - 2026-11-03
 
 - `compare.xlsx` opens in Excel without the "We found a problem... repaired records: View" message (the

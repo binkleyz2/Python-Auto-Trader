@@ -69,12 +69,27 @@ def _trades_sheet(ws, trades: pd.DataFrame, st, settings_col: str | None = None)
         ws.auto_filter.ref = ws.dimensions
 
 
+def _value_labels():
+    """The value above every point, small. Each show* flag is written out: Excel treats a missing one as
+    'on' and would add the series name, date and legend key to every label."""
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.chart.text import RichText
+    from openpyxl.drawing.text import CharacterProperties, Paragraph, ParagraphProperties, RichTextProperties
+    small = CharacterProperties(sz=700)                             # 7 pt
+    para = Paragraph(pPr=ParagraphProperties(defRPr=small), endParaRPr=small)
+    para.r = []                                                     # no empty text run inside the style
+    return DataLabelList(numFmt="$#,##0", dLblPos="t", showLegendKey=False, showVal=True, showCatName=False,
+                         showSerName=False, showPercent=False, showBubbleSize=False, showLeaderLines=False,
+                         txPr=RichText(bodyPr=RichTextProperties(), p=[para]))
+
+
 def _equity_chart(ws, data_ws, first_row: int, last_row: int, cols: list[int], title: str):
     """Line chart of columns ``cols`` (one line each, header in ``first_row - 1``) against the dates in column A."""
     from openpyxl.chart import LineChart, Reference
     ch = LineChart()
     ch.title, ch.y_axis.title, ch.x_axis.title = title, "Account value", None
-    ch.height, ch.width = 10, 26
+    days = last_row - first_row + 1
+    ch.height, ch.width = 12, min(120, max(26, days * 0.6))         # wider with more days, so the labels fit (cm)
     for col in cols:
         ch.add_data(Reference(data_ws, min_col=col, min_row=first_row - 1, max_row=last_row), titles_from_data=True)
     ch.set_categories(Reference(data_ws, min_col=1, min_row=first_row, max_row=last_row))
@@ -84,6 +99,7 @@ def _equity_chart(ws, data_ws, first_row: int, last_row: int, cols: list[int], t
     for s in ch.series:
         s.smooth = False
         s.graphicalProperties.line.width = 19050                    # 1.5 pt
+        s.dLbls = _value_labels()
     if len(cols) == 1:
         ch.legend = None
     else:

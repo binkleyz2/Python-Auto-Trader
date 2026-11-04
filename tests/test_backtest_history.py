@@ -284,6 +284,10 @@ def test_excel_results_with_line_charts(tmp_path):
     assert len(chart.series) == CHART_LINES                     # only the best 10 of 15 drawn...
     assert wb["Equity"].max_column == 16                        # ...but every combination is on the Equity tab
     assert wb["Trades"]["A1"].value == "Settings" and wb["Trades"].max_row > 1
+    import zipfile
+    xml = zipfile.ZipFile(files[0]).read("xl/charts/chart1.xml").decode()
+    assert xml.count("<dLbls>") == CHART_LINES                  # a value on every point of every line...
+    assert '<showVal val="1"/>' in xml and '<showSerName val="0"/>' in xml and '<showCatName val="0"/>' in xml
 
 
 def test_excel_files_open_without_repairs(tmp_path):
