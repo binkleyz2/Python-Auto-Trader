@@ -4,6 +4,16 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.19.1 - 2026-11-04
+
+- **Breakeven stop logged once, not every bar.** When a trade filled between cents (a short at 175.8725),
+  the stop rounded to 175.88, and the bot kept thinking it still had to move the stop to the entry price,
+  so it wrote "BREAKEVEN ... stop moved to the entry price" every 5 minutes. The stop itself was only ever
+  moved once, which is what the chart and "moved 1x" showed. Now the message appears once, when it moves.
+- The stop-move line in the log now says why: "BREAKEVEN stop PLTR 179.20 -> 175.88" or "TRAIL stop ...".
+  (Before, a breakeven move was logged as TRAIL, even with trail_stop off.)
+- Dashboard legend: "Stop" instead of "Stop (trails)", since it may not trail.
+
 ## v1.19.0 - 2026-11-03
 
 - **`download` command:** `py -m swingbot download --days 180 --universe sp500,dow,nasdaq100,nasdaq,russell2000`

@@ -1205,14 +1205,18 @@ class Bot:
         log.warning("No stop found for %d %s - placed standalone stop at %.2f (order %s)",
                     qty, self.symbol, self.pos["stop"], oid)
 
-    def raise_stop(self, new_stop: float) -> None:
+    def _stop_price(self, x: float) -> Decimal:
+        """A stop price rounded to what the market accepts, on the safe side (down for a long, up for a short)."""
+        return self._round_price(x, ROUND_DOWN if self.pos.get("side", 1) > 0 else ROUND_UP)
+
+    def raise_stop(self, new_stop: float, why: str = "TRAIL") -> None:
         """Tighten the stop (up for a long, down for a short). Live: reprice the existing stop order in one
         step, so a stop is always in place. If the broker refuses, the old stop stays and we retry next bar."""
         side = self.pos.get("side", 1)
-        new_d = self._round_price(new_stop, ROUND_DOWN if side > 0 else ROUND_UP)
+        new_d = self._stop_price(new_stop)
         if not better_stop(float(new_d), self.pos["stop"], side):
             return
-        log.info("TRAIL stop %s %.2f -> %s", self.symbol, self.pos["stop"], new_d)
+        log.info("%s stop %s %.2f -> %s", why, self.symbol, self.pos["stop"], new_d)
         step_x = (self._x(self.last_bar_seen) + 1) if self.last_bar_seen is not None else self._x(now_et())
         if not self.live:
             self.pos["stop"] = float(new_d)
@@ -1229,6 +1233,18 @@ class Bot:
             self.pos["stop_steps"].append([step_x, float(new_d)])
         except Exception as e:
             log.error("Could not move the stop (keeping %.2f, will retry next bar): %s", self.pos["stop"], e)
+
+    def breakeven(self, close: float) -> None:
+        """Move the stop to the entry price once the trade is breakeven_at_r ahead (once, not every bar)."""
+        p, side = self.pos, self.pos.get("side", 1)
+        be = sided_breakeven_stop(p["entry"], p["init_stop"], close, p["stop"], self.cfg, side)
+        # compare at the price the order would really get: a short filled at 175.8725 gets a breakeven
+        # stop of 175.88, and compared unrounded it looked "not at the entry yet" on every bar
+        if better_stop(float(self._stop_price(be)), p["stop"], side):
+            log.info("BREAKEVEN %s: price %.2f is %.1fR %s entry - moving the stop to the entry price",
+                     self.symbol, close, side * (close - p["entry"]) / abs(p["entry"] - p["init_stop"]),
+                     "above" if side > 0 else "below")
+            self.raise_stop(be, why="BREAKEVEN")
 
     def flatten(self, reason: str) -> None:
         if not self.symbol:
@@ -1475,13 +1491,7 @@ class Bot:
                 if better_stop(new_stop, self.pos["stop"], side):
                     self.raise_stop(new_stop)
             if self.pos and self.symbol in frames:
-                p, close = self.pos, float(frames[self.symbol][0]["close"].iat[-1])
-                be = sided_breakeven_stop(p["entry"], p["init_stop"], close, p["stop"], cfg, side)
-                if better_stop(be, p["stop"], side):
-                    log.info("BREAKEVEN %s: price %.2f is %.1fR %s entry - stop moved to the entry price",
-                             self.symbol, close, side * (close - p["entry"]) / abs(p["entry"] - p["init_stop"]),
-                             "above" if side > 0 else "below")
-                    self.raise_stop(be)
+                self.breakeven(float(frames[self.symbol][0]["close"].iat[-1]))
             return
 
         # 3) look for a new entry on any watched symbol (best-ranked first)

@@ -317,3 +317,23 @@ def test_public_short_skipped_when_the_broker_would_refuse(tmp_path, monkeypatch
     bot = _bot(b, tmp_path, monkeypatch, direction="short")
     bot.enter(50.0, 51.0, "short bounce", side=-1)
     assert not b.sent and bot.pos is None and why in caplog.text
+
+
+@pytest.mark.parametrize("side,stop,fill,close,moved", [(1, 49.0, 50.0075, 52.0, "50.00"),
+                                                        (-1, 51.0, 49.9925, 48.0, "50.00")])
+def test_breakeven_moves_the_stop_once(tmp_path, monkeypatch, caplog, side, stop, fill, close, moved):
+    """A fill between cents (175.8725) made the breakeven stop round to a cent past it, so the bot thought
+    it still had to move the stop and logged BREAKEVEN on every bar. It should move it once and go quiet."""
+    b = FakeBroker()
+    bot = _bot(b, tmp_path, monkeypatch, direction="both", breakeven_at_r=1.0)
+    bot.enter(50.0, stop, "bounce" if side > 0 else "short bounce", side=side)
+    bot.pos["entry"] = fill
+    sent = len(b.sent)
+    with caplog.at_level("INFO"):
+        for _ in range(4):
+            bot.breakeven(close)
+    assert sum(r.getMessage().startswith("BREAKEVEN AAPL:") for r in caplog.records) == 1
+    assert bot.pos["stop"] == float(moved)
+    stops = b.open_stops()
+    assert len(stops) == 1 and stops[0].stop_price == Decimal(moved)
+    assert len(b.sent) <= sent + 1                                # one reprice at most, not one per bar
