@@ -4,6 +4,16 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.18.0 - 2026-11-03
+
+- **Interactive backtest chart:** `backtest-chart.html` / `compare-chart.html` in each run's zip. Opens in any
+  browser, fills the window (made for a 32" 2560x1440 screen), with a point at every trade exit. Hovering shows
+  a box at the cursor with the account value, date and time, and that trade (symbol, setup, exit price and
+  reason, P&L, R). Drag to zoom into some days, double-click to reset; comparison lines can be shown or hidden
+  from the legend (best 10 by net at first). Self-contained: no outside scripts, works offline.
+- The value labels on every point of the Excel charts (v1.17.0) are gone again; the Excel charts are plain
+  lines, and the hover details live in the HTML chart.
+
 ## v1.17.0 - 2026-11-03
 
 - **Data labels on the backtest charts:** every point shows that day's account value (whole dollars, 7 pt,

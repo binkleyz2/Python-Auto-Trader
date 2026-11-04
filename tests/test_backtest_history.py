@@ -278,16 +278,13 @@ def test_excel_results_with_line_charts(tmp_path):
     assert len(wb["Summary"]._charts) == 1 and wb["Equity"].max_row == len(curve) + 1
     assert wb["Trades"].max_row == len(trades) + 1 and wb["Trades"]["P1"].value == "P&L"
     files = m._compare(hist, cfg, ["swing_n=3-5", "breakeven_at_r=1-2"], tmp_path / "c", steps=["0.25"])  # 15 runs
-    assert files[0].name == "compare.xlsx" and (tmp_path / "c" / "compare.csv").exists()   # CSVs kept too
-    wb = openpyxl.load_workbook(files[0])
+    xl = next(f for f in files if f.name == "compare.xlsx")
+    assert (tmp_path / "c" / "compare.csv").exists()                                    # CSVs kept too
+    wb = openpyxl.load_workbook(xl)
     chart = wb["Compare"]._charts[0]
     assert len(chart.series) == CHART_LINES                     # only the best 10 of 15 drawn...
     assert wb["Equity"].max_column == 16                        # ...but every combination is on the Equity tab
     assert wb["Trades"]["A1"].value == "Settings" and wb["Trades"].max_row > 1
-    import zipfile
-    xml = zipfile.ZipFile(files[0]).read("xl/charts/chart1.xml").decode()
-    assert xml.count("<dLbls>") == CHART_LINES                  # a value on every point of every line...
-    assert '<showVal val="1"/>' in xml and '<showSerName val="0"/>' in xml and '<showCatName val="0"/>' in xml
 
 
 def test_excel_files_open_without_repairs(tmp_path):
@@ -300,10 +297,35 @@ def test_excel_files_open_without_repairs(tmp_path):
     cfg = Config(min_avg_dollar_volume=0)
     trades, curve, _ = bt.run(hist, cfg)
     books = [run_workbook(tmp_path / "backtest.xlsx", trades, curve, cfg, "one run"),
-             m._compare(hist, cfg, ["swing_n=4,5"], tmp_path / "c")[0]]
+             next(f for f in m._compare(hist, cfg, ["swing_n=4,5"], tmp_path / "c") if f.suffix == ".xlsx")]
     for book in books:
         z = zipfile.ZipFile(book)
         for name in [n for n in z.namelist() if n.startswith("xl/worksheets/sheet")]:
             view = re.search(r"<sheetView.*?</sheetView>|<sheetView[^>]*/>", z.read(name).decode()).group(0)
             if 'pane="' in view:
                 assert "<pane " in view, f"{book.name} {name}: {view}"
+
+
+def test_interactive_charts(tmp_path):
+    import json
+    import re
+    from swingbot import __main__ as m
+    from swingbot.backtest_chart import run_chart, equity_points, BEST
+    hist = {f"S{i:02d}": synthetic(f"S{i:02d}", days=20, seed=i) for i in range(6)}
+    cfg = Config(min_avg_dollar_volume=0, direction="both")
+    trades, curve, _ = bt.run(hist, cfg)
+    days = [d.strftime("%Y-%m-%d") for d in curve.index]
+    pts = equity_points(trades, days, cfg.starting_equity)
+    assert pts[0][1] == cfg.starting_equity and len(pts) == len(trades) + 2      # start, each exit, end of last day
+    assert abs(pts[-1][1] - curve.iloc[-1]) < 0.02                                 # ends where the daily curve ends
+    assert all(a[0] <= b[0] for a, b in zip(pts, pts[1:]))                         # in time order
+    first = next(p for p in pts if p[4])                                           # a trade: date, time, symbol, P&L
+    assert re.match(r"\d{4}-\d\d-\d\d$", first[2]) and re.match(r"\d\d:\d\d$", first[3]) and first[9] is not None
+    page = run_chart(tmp_path / "backtest-chart.html", trades, curve, cfg, "one run").read_text(encoding="utf-8")
+    assert "<script src" not in page and "http" not in page.split("<script>")[1]   # works offline
+    data = json.loads(re.search(r"const D = (\{.*?\});\n", page).group(1))
+    assert len(data["series"]) == 1 and data["series"][0]["pts"] == json.loads(json.dumps(pts))
+    files = m._compare(hist, cfg, ["swing_n=3-5", "breakeven_at_r=1-2"], tmp_path / "c", steps=["0.25"])
+    assert files[0].name == "compare-chart.html"
+    data = json.loads(re.search(r"const D = (\{.*?\});\n", files[0].read_text(encoding="utf-8")).group(1))
+    assert len(data["series"]) == 15 and sum(s["on"] for s in data["series"]) == BEST

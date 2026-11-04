@@ -212,12 +212,12 @@ def _archive(files: list[Path], cfg: Config, args, workdir: Path, now=None) -> P
 
 
 def _excel(write, path: Path) -> bool:
-    """Write an Excel copy of the results (with charts); the CSVs are kept either way."""
+    """Write an extra copy of the results (Excel, or the interactive chart); the CSVs are kept either way."""
     try:
         write(path)
         return True
     except Exception as e:
-        print(f"(No Excel file this time - {e}. The CSV files have everything.)")
+        print(f"(No {path.name} this time - {e}. The CSV files have everything.)")
         return False
 
 
@@ -290,10 +290,13 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
     (out / "compare.txt").write_text(table.to_string() + "\n", encoding="utf-8")
     from .backtest_xlsx import compare_workbook
     excel = _excel(lambda p: compare_workbook(p, table, curves, run_trades, cfg), out / "compare.xlsx")
+    from .backtest_chart import compare_chart
+    chart = _excel(lambda p: compare_chart(p, table, curves, run_trades, cfg), out / "compare-chart.html")
     print("\n" + table.to_string())
     if not cfg.backtest_results_dir:
         print(f"\nEach run's trades and full report are in {out}/ (compare.csv, report-*.txt, trades-*.csv)")
-    return ([out / "compare.xlsx"] if excel else []) + [out / "compare.txt", out / "compare.csv"] + written
+    return ([out / "compare-chart.html"] if chart else []) + ([out / "compare.xlsx"] if excel else []) + \
+        [out / "compare.txt", out / "compare.csv"] + written
 
 
 def _logging(workdir: Path) -> None:
@@ -414,8 +417,11 @@ def main(argv=None) -> None:
         (out / "report.txt").write_text(text + "\n", encoding="utf-8")
         from .backtest_xlsx import run_workbook
         excel = _excel(lambda p: run_workbook(p, trades, curve, cfg, title), out / "backtest.xlsx")
+        from .backtest_chart import run_chart
+        chart = _excel(lambda p: run_chart(p, trades, curve, cfg, title), out / "backtest-chart.html")
         print("\n" + text)
-        names = (["backtest.xlsx"] if excel else []) + ["report.txt", "trades.csv", "equity.csv", "picks.json"]
+        names = (["backtest-chart.html"] if chart else []) + (["backtest.xlsx"] if excel else []) + \
+            ["report.txt", "trades.csv", "equity.csv", "picks.json"]
         if args.command == "backtest" and (kept := _archive([out / n for n in names], cfg, args, workdir)):
             print(f"\nSaved as {kept} ({', '.join(names)})")
         else:
