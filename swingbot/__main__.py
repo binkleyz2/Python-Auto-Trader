@@ -391,6 +391,37 @@ def _start_dashboard(cfg, bot):
         return None
 
 
+# the switches each command reads (the rest would be silently ignored, so they're refused instead)
+USES = {"fetch": {"config", "data", "bars"}}
+
+
+def _refuse_unused(ap, args, argv: list[str]) -> None:
+    """Stop with a clear message when a switch is given that this command doesn't use."""
+    uses = USES.get(args.command)
+    if uses is None:
+        return
+    given = []
+    for tok in argv:
+        if tok.startswith("--"):
+            act = ap._option_string_actions.get(tok.split("=", 1)[0])
+            if act is not None and act.dest not in uses and act.dest not in ("help", "version"):
+                given.append(tok.split("=", 1)[0])
+    if not given:
+        return
+    which = ", ".join(dict.fromkeys(given))
+    if args.command == "fetch":
+        if args.symbol:
+            what = f"--symbol {args.symbol}"
+        elif "--universe" in given:
+            what = f"--universe {args.universe}"
+        else:
+            what = "--universe sp500"
+        sys.exit(f"fetch doesn't use {which}: it only gets the last week of bars for the watchlist in your config.\n"
+                 f"For indexes, chosen stocks or more history, use download:\n"
+                 f"  py -m swingbot download --days {args.days or 180} {what}")
+    sys.exit(f"{args.command} doesn't use {which}.")
+
+
 def main(argv=None) -> None:
     from . import __version__
     ap = argparse.ArgumentParser(prog="swingbot", description=__doc__,
@@ -422,6 +453,7 @@ def main(argv=None) -> None:
     ap.add_argument("--uninstall", action="store_true", help="site: stop it and don't start it at logon any more")
     ap.add_argument("--stop", action="store_true", help="site: stop the copy running in the background")
     args = ap.parse_args(argv)
+    _refuse_unused(ap, args, sys.argv[1:] if argv is None else argv)
 
     _env()
     _first_config(Path(args.config))

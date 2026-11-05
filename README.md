@@ -65,7 +65,7 @@ To get the secret key, go to public.com → Settings → Security → API. To fi
 
 ```bash
 python -m swingbot demo                 # backtest on fake data, only to confirm the code runs
-python -m swingbot fetch --data data    # save the last week of 5-min bars into data/ (run once a day)
+python -m swingbot fetch --data data    # last week of bars for your watchlist into data/ (indexes, more days: download)
 python -m swingbot backtest --days 120  # backtest your settings on 120 days of Alpaca history (see below)
 python -m swingbot backtest --data data # backtest on the bars you've collected
 python -m swingbot scan                 # show this morning's ranking

@@ -379,3 +379,17 @@ def test_windows_reserved_names_are_not_used_for_files(tmp_path):
     (tmp_path / "d").mkdir()
     save_csv(full["AUX"], tmp_path / "d" / f"{file_stem('AUX')}.csv")       # the fetch command's files
     assert list(load_dir(tmp_path / "d")) == ["AUX"]
+
+
+def test_fetch_refuses_switches_it_would_ignore(tmp_path, monkeypatch, capsys):
+    """fetch only reads the watchlist; --universe etc. used to be silently ignored."""
+    from swingbot.__main__ import main
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as e:
+        main(["fetch", "--universe", "dow,sp500"])
+    msg = str(e.value)
+    assert "fetch doesn't use --universe" in msg and "download --days 180 --universe dow,sp500" in msg
+    with pytest.raises(SystemExit) as e:
+        main(["fetch", "--days=90", "--symbol", "NVDA"])
+    assert "--days, --symbol" in str(e.value) and "download --days 90 --symbol NVDA" in str(e.value)
+    assert not (tmp_path / "config.yaml").exists()          # stopped before doing anything

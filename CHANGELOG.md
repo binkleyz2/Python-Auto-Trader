@@ -4,6 +4,13 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.21.1 - 2026-11-05
+
+- **`fetch` says when a switch does nothing.** It only gets the last week of bars for your config's
+  watchlist, so `--universe`, `--days`, `--symbol` and the like used to be silently ignored
+  (`fetch --universe dow,sp500` just fetched the watchlist). Now it stops and shows the `download` command
+  that does what you asked, e.g. `py -m swingbot download --days 180 --universe dow,sp500`.
+
 ## v1.21.0 - 2026-11-05
 
 - **Close a winning trade by hand:** a **Close now** button on the dashboard's Open P&L tile, only while the
