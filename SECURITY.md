@@ -10,4 +10,4 @@ currently being supported with security updates.
 | 1.6.x  | :white_check_mark: |\
 ## Reporting a Vulnerability
 
-Send email to github-issues@qwertyuiop.us
+Send email to envy-pang-jersey@duck.com
