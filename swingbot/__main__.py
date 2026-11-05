@@ -368,6 +368,7 @@ def _start_dashboard(cfg, bot):
             dash.on_bar_size = bot.request_bar_size     # the page's controls: bar size and rescan, never orders
             dash.on_rescan = bot.request_rescan
             dash.on_setting = bot.request_setting       # trail distance, breakeven, profit target - for today
+            dash.on_close = bot.request_close           # "Close now": sells a trade that's ahead, on request
         url = dash.start()
         if not url:
             logging.getLogger("swingbot").warning("Dashboard: no free port near %d - running without it.",

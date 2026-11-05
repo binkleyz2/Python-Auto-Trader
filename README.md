@@ -92,7 +92,9 @@ Backtest runs are zipped into `backtests/Results/`, daily logs go to `logs/`, an
 - the last price (refreshed every 15 seconds) with open and day P&L
 - today's trades, the morning scan, and recent activity
 
-Nothing on the page can place, change or cancel orders. It is reachable from this PC only.
+It is reachable from this PC only.
+
+**Close a winning trade by hand:** while a trade is ahead, the Open P&L tile has a **Close now** button. After you confirm, the bot sells (or buys back a short) at the market and records it as "closed by you". It checks a fresh price first and only closes if the trade is still ahead; if it has slipped back, the trade stays open with its stop. A market order can fill a little worse than the last price, so a trade that is only just ahead can still close a few cents behind. The button is greyed out while the trade is behind, and only shows in a browser on the PC running the bot (with `dashboard_lan_control: true`, also for network viewers with the key). After closing, the bot carries on looking for new trades as usual. Apart from this button, the page's controls never place orders; the profit target setting can move the open trade's target order.
 
 **Earlier days on the chart:** the **Show** dropdown at the top right of the chart switches between Today, 2 days and 5 days. The bot always uses the same history (about a week) to find swing points and trend lines; this only changes how much of it you see, so a line that started on an earlier day is drawn in full. Your choice is remembered in that browser.
 

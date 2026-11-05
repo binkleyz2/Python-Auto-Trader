@@ -4,6 +4,14 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.21.0 - 2026-11-05
+
+- **Close a winning trade by hand:** a **Close now** button on the dashboard's Open P&L tile, only while the
+  trade is ahead. After you confirm, the bot checks a fresh price, and if the trade is still ahead it cancels
+  the stop and target and sells (or buys back a short) at the market; the trade is recorded as "closed by
+  you". If it has slipped back by then, nothing is sold and the stop stays. Shown only on the PC running the
+  bot (or network viewers with `dashboard_lan_control: true`). The bot keeps looking for new trades after.
+
 ## v1.20.1 - 2026-11-05
 
 - **Dashboard: the "not used - trail_stop is off" note no longer repeats.** On the Trail step row it was

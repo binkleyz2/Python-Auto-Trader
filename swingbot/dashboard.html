@@ -51,6 +51,10 @@
   .tile { padding: 10px 12px; min-width: 0; }
   .tile .k { font-size: 12px; color: var(--ink-2); }
   .tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .k { display: flex; align-items: center; gap: 6px; }
+  .tbtn { margin-left: auto; font: inherit; font-size: 11px; padding: 0 7px; line-height: 18px; border-radius: 5px;
+          border: 1px solid var(--good); color: var(--good-text); background: var(--surface); cursor: pointer; }
+  .tbtn:disabled { border-color: var(--border); color: var(--muted); cursor: default; }
   .tile .s { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .up { color: var(--good-text); } .down { color: var(--bad-text); }
   .card { padding: 12px 14px; margin-bottom: 14px; }
@@ -125,7 +129,9 @@
   <section class="tiles">
     <div class="tile"><div class="k">Position</div><div class="v" id="t-pos">–</div><div class="s" id="t-pos-s"></div></div>
     <div class="tile"><div class="k">Last price</div><div class="v" id="t-last">–</div><div class="s" id="t-last-s"></div></div>
-    <div class="tile"><div class="k">Open P&amp;L</div><div class="v" id="t-open">–</div><div class="s" id="t-open-s"></div></div>
+    <div class="tile"><div class="k">Open P&amp;L <button id="close" class="tbtn" type="button" hidden
+         title="Sell now at the market and keep the profit (only while the trade is ahead)">Close now</button></div>
+         <div class="v" id="t-open">–</div><div class="s" id="t-open-s"></div></div>
     <div class="tile"><div class="k">Stop</div><div class="v" id="t-stop">–</div><div class="s" id="t-stop-s"></div></div>
     <div class="tile"><div class="k">Day P&amp;L</div><div class="v" id="t-day">–</div><div class="s" id="t-day-s"></div></div>
     <div class="tile"><div class="k">Trades today</div><div class="v" id="t-trades">–</div><div class="s" id="t-trades-s"></div></div>
@@ -229,6 +235,11 @@ function renderTop(s) {
     setText("t-pos-s", `${p.kind} · in at ${fmt(p.entry)} · ${p.entry_time}`);
     const unreal = p.unreal, r = p.r;
     setText("t-open", signed(unreal), tone(unreal));
+    const cb = $("close");
+    cb.hidden = !(CTRL && !s.final);
+    cb.disabled = !s.can_close || s.close_pending || closeBusy;
+    cb.textContent = s.close_pending || closeBusy ? "closing…" : "Close now";
+    cb.title = s.can_close ? "Sell now at the market and keep the profit" : "Only while the trade is ahead";
     setText("t-open-s", r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R  (1R = ${money(p.risk_dollars)})`);
     setText("t-stop", fmt(p.stop));
     const dist = s.last != null ? (s.last - p.stop) * side : null;
@@ -241,6 +252,7 @@ function renderTop(s) {
     setText("t-pos-s", !own ? (s.pos ? `the bot is in a trade in ${s.symbol}` : `no trade in ${chartSym}`)
                             : (s.symbol ? "watching for a setup" : ""));
     setText("t-open", "–"); setText("t-open-s", "");
+    $("close").hidden = true;
     setText("t-stop", "–"); setText("t-stop-s", "");
   }
   if (own) {
@@ -513,6 +525,21 @@ $("rescan").addEventListener("click", async () => {
   try { $("tfnote").textContent = (await control("rescan", {}))[1]; }
   catch (e) { $("tfnote").textContent = "couldn't reach the bot"; }
   finally { tfBusy = false; }
+});
+
+// "Close now": only on the PC running the bot, only while the trade is ahead; the bot checks again before selling
+let closeBusy = false;
+$("close").addEventListener("click", async () => {
+  const p = S && S.pos;
+  if (!p) return;
+  const side = (p.side || 1) < 0 ? "Buy back" : "Sell";
+  if (!confirm(`${side} ${p.shares} ${S.symbol} now at the market?\n\nOpen P&L is about ${signed(p.unreal)}. ` +
+               `The bot checks the price again first and only closes if the trade is still ahead. ` +
+               `A market order can fill a little worse than the last price.`)) return;
+  closeBusy = true; $("close").disabled = true; $("close").textContent = "closing…";
+  try { const [, msg] = await control("close", {}); $("t-open-s").textContent = msg; }
+  catch (e) { $("t-open-s").textContent = "couldn't reach the bot"; }
+  finally { closeBusy = false; }
 });
 
 // ------------------------------------------------------------------ which watched symbol is charted (this browser only)

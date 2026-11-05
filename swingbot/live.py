@@ -120,6 +120,7 @@ class Bot:
         self.views: dict[str, dict] = {}               # chart data per watched symbol (dashboard)
         self.watch_info: dict[str, dict] = {}          # latest price / nearest line per watched symbol
         self.pending_rescan = False                    # "Rescan" pressed on the dashboard
+        self.pending_close = False                     # "Close now" pressed on the dashboard (trade ahead only)
         self.midday_done = False                       # today's automatic midday rescan has run (or was dropped)
         self.midday_waiting = False                    # midday rescan is due but waits for the open trade to close
         self.cfg0 = dataclasses.replace(cfg)           # config.yaml as loaded (today's changes are compared to it)
@@ -435,6 +436,44 @@ class Bot:
         self.pending_rescan = True
         log.info("Dashboard: rescan requested")
         return "Rescanning with today's prices..."
+
+    # ------------------------------------------------- close a winning trade by hand
+    def _open_pnl(self, price: float | None) -> float | None:
+        p = self.pos
+        if not p or price is None or price != price:
+            return None
+        return (price - p["entry"]) * p["shares"] * self.point_value * p.get("side", 1)
+
+    def request_close(self) -> str:
+        """Dashboard "Close now" button (dashboard thread): only queues it, and only for a trade that's ahead.
+        The main loop checks again at a fresh price before it sells."""
+        if self.final:
+            raise ValueError("the session is over")
+        if not self.pos:
+            raise ValueError("there's no open trade")
+        pnl = self._open_pnl(self.last_price)
+        if pnl is None or pnl <= 0:
+            raise ValueError("only when the trade is ahead" + (f" - it's at {pnl:+,.2f} now" if pnl is not None else ""))
+        self.pending_close = True
+        log.info("Dashboard: close %s requested (open P&L %+.2f)", self.symbol, pnl)
+        return f"Closing {self.symbol} (about {pnl:+,.2f})..."
+
+    def close_by_hand(self) -> None:
+        """Close the open trade at the market if it is still ahead at a fresh price; otherwise leave it."""
+        self.pending_close = False
+        if not self.pos or self.final:
+            return
+        self.refresh_quote()
+        pnl = self._open_pnl(self.last_price)
+        if pnl is None or pnl <= 0:
+            log.warning("Close by hand skipped: %s is no longer ahead (%s) - the trade stays open with its stop",
+                        self.symbol, "no price" if pnl is None else f"{pnl:+.2f}")
+            return
+        log.info("CLOSE BY HAND %s at about %.2f (open P&L %+.2f)", self.symbol, self.last_price, pnl)
+        if self.live:
+            self.flatten("closed by you")
+        else:
+            self._close_pos(self.last_price, "closed by you")
 
     def check_midday_rescan(self, now: datetime | None = None) -> None:
         """Automatic rescan at midday_rescan_time. In a trade it waits until the trade closes, and is
@@ -1373,7 +1412,7 @@ class Bot:
         log.info("%sEXIT %s @ %.2f (%s) P&L %.2f", "" if self.live else "[paper] ", self.symbol, price, reason, pnl)
         self._record(reason, pnl, exit_price=price)
         exit_x = self._x(self.last_bar_seen) if (self.last_bar_seen is not None and reason not in
-                                                 ("end of day", "kill switch")) else min(390 / self.bm - 1, self._x(now_et()))
+                                                 ("end of day", "kill switch", "closed by you")) else min(390 / self.bm - 1, self._x(now_et()))
         self.closed.append(dict(symbol=self.symbol, kind=p["kind"], side=side, shares=p["shares"], entry=p["entry"], exit=price, pnl=pnl,
                                 reason=reason, entry_time=p["entry_clock"], exit_time=now_et().strftime("%H:%M"),
                                 entry_x=p["entry_x"], exit_x=max(exit_x, p["entry_x"]),
@@ -1652,6 +1691,7 @@ class Bot:
             not_flat=self.not_flat, leftover=self.leftover,
             settings=self._settings_rows(), settings_pending=sorted(self.pending_settings),
             stale=self._stale_status(), watch=self._watch_rows(), can_rescan=not self.pos and not self.final, rescan_pending=self.pending_rescan,
+            can_close=bool(p) and not self.final and unreal > 0, close_pending=self.pending_close,
             views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
             **self.view,
         )
@@ -1803,6 +1843,8 @@ class Bot:
                 if self.apply_pending_settings():
                     self.publish()
                 self.check_midday_rescan(now)
+                if self.pending_close:
+                    self.close_by_hand()
                 if self.pending_rescan:
                     self.rescan()
                 self.step()
@@ -1824,7 +1866,7 @@ class Bot:
                 if self.pending_settings:
                     self.apply_pending_settings()          # takes effect now, between checks
                     self.publish()
-                if remaining <= 0 or stop_file.exists() or self.pending_bm or self.pending_rescan:
+                if remaining <= 0 or stop_file.exists() or self.pending_bm or self.pending_rescan or self.pending_close:
                     break
                 _time.sleep(min(2.0 if self.dashboard is not None else 15.0, max(1.0, remaining)))
                 if self.dashboard is not None and not (self.pending_bm or self.pending_rescan) \

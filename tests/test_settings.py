@@ -119,3 +119,55 @@ def test_trail_settings_greyed_out_when_trailing_is_off(tmp_path):
     on = live.Bot(None, Config(), live=False, workdir=tmp_path / "on")
     rows = {i.get("key") or i["label"]: i for g in on.status()["settings"] for i in g["items"]}
     assert not rows["trail_buffer_atr"].get("off") and "trailing stop" in rows["With no target"]["text"]
+
+
+def test_close_now_only_when_ahead_and_checked_again(tmp_path, monkeypatch):
+    bot, t = _bot(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="no open trade"):
+        bot.request_close()
+    bot.enter(50.0, 49.0, "bounce")
+    price = {"p": 49.80}
+    monkeypatch.setattr(bot, "_last_trade_price", lambda: price["p"])
+    t.price = 49.80
+    bot.refresh_quote()
+    with pytest.raises(ValueError, match="only when the trade is ahead"):   # behind: refused
+        bot.request_close()
+    assert not bot.status()["can_close"]
+    price["p"] = t.price = 50.60
+    bot.refresh_quote()
+    assert bot.status()["can_close"]
+    assert "Closing AAPL" in bot.request_close() and bot.pending_close
+    price["p"] = t.price = 49.90                                            # fell back before the bot got to it
+    bot.close_by_hand()
+    assert bot.pos is not None and not bot.pending_close and bot.bot_shares() == 125   # left open, stop in place
+    price["p"] = t.price = 50.70
+    bot.refresh_quote()
+    bot.request_close()
+    bot.close_by_hand()
+    assert bot.pos is None and bot.bot_shares() == 0
+    assert bot.closed[-1]["reason"] == "closed by you" and bot.closed[-1]["pnl"] > 0
+    assert "closed by you" in (tmp_path / "trades.csv").read_text(encoding="utf-8")
+    assert not [o for o in t.all.values() if o.status in ("new", "held")]  # stop and target legs cancelled
+
+
+def test_close_now_in_a_dry_run_and_on_the_page(tmp_path):
+    bot = live.Bot(None, Config(), live=False, workdir=tmp_path)
+    bot.symbol = "AAA"
+    bot.pos = dict(kind="bounce", side=1, shares=10, entry=20.0, stop=19.0, init_stop=19.0, target=None,
+                   entry_x=3, entry_clock="10:00", stop_steps=[[3, 19.0]])
+    bot.last_price = 20.5
+    bot.request_close()
+    bot.refresh_quote = lambda: None
+    bot.close_by_hand()
+    assert bot.pos is None and bot.closed[-1]["pnl"] == pytest.approx(5.0)
+    d = Dashboard(8882)
+    d.on_close = bot.request_close
+    d.start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{d.port}/close", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json", "X-Swingbot-Token": d.token})
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        assert e.value.code == 400 and b"no open trade" in e.value.read()   # reached the bot, which said no
+    finally:
+        d.stop()
