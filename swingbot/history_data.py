@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from .data import COLS, empty_bars, normalize
+from .data import COLS, empty_bars, file_stem, normalize
 
 log = logging.getLogger("swingbot")
 ET = ZoneInfo("America/New_York")
@@ -24,7 +24,15 @@ BATCH = 50                       # symbols per request (Alpaca pages through the
 
 
 def _path(folder: Path, sym: str) -> Path:
-    return folder / f"{sym.replace('/', '_')}.csv.gz"
+    p = folder / f"{file_stem(sym)}.csv.gz"
+    old = folder / f"{sym.replace('/', '_')}.csv.gz"            # before v1.19.3: CON.csv.gz, which OneDrive can't sync
+    if old != p and not p.exists():
+        try:
+            if old.exists():
+                old.replace(p)
+        except OSError:
+            pass
+    return p
 
 
 def load_cached(folder: Path, sym: str) -> pd.DataFrame:

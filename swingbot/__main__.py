@@ -477,7 +477,7 @@ def main(argv=None) -> None:
         return
 
     from .live import is_weekday, wait_for_open
-    from .data import append_csv
+    from .data import append_csv, file_stem
     _logging(workdir)
     new = _new_settings(Path(args.config))
     if new:
@@ -503,7 +503,7 @@ def main(argv=None) -> None:
             folder.mkdir(exist_ok=True)
             fetcher = BotClass(client, cfg, live=False, workdir=workdir)
             for s in cfg.watchlist:
-                n = append_csv(fetcher.fetch_bars(s, "WEEK"), folder / f"{s}.csv")
+                n = append_csv(fetcher.fetch_bars(s, "WEEK"), folder / f"{file_stem(s)}.csv")
                 print(f"{s}: {n} bars stored")
             return
 

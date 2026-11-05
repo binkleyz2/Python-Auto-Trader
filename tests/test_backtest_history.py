@@ -356,3 +356,26 @@ def test_download_command_fills_the_cache_in_chunks(tmp_path, monkeypatch, capsy
     assert len(list((tmp_path / "data" / "alpaca-5min").glob("*.csv.gz"))) == 7
     with pytest.raises(SystemExit):
         m._download(Config(), SimpleNamespace(days=None, symbol="A", universe="sp500"), tmp_path)
+
+
+def test_windows_reserved_names_are_not_used_for_files(tmp_path):
+    """CON (Concentra) would be saved as CON.csv.gz - a name Windows keeps for the console, which stops
+    OneDrive syncing. Such symbols get an underscore, and an old CON.csv.gz is renamed when it's next used."""
+    from swingbot.data import file_stem, load_dir, save_csv, symbol_from_stem
+    assert [file_stem(s) for s in ("CON", "con", "PRN", "COM1", "LPT9", "NUL", "AAPL", "CONN", "BRK/B", "CON.A")] == \
+        ["CON_", "con_", "PRN_", "COM1_", "LPT9_", "NUL_", "AAPL", "CONN", "BRK_B", "CON_.A"]
+    assert symbol_from_stem("CON_") == "CON" and symbol_from_stem("CONN") == "CONN" and symbol_from_stem("A_") == "A_"
+    full = {s: synthetic(s, days=10, start="2026-09-01", seed=k) for k, s in enumerate(["CON", "AUX"])}
+    client = FakeAlpacaData(full)
+    now = datetime(2026, 9, 16, 9, 0, tzinfo=ET)
+    load_history(client, ["CON"], 5, tmp_path, now=now)
+    assert (tmp_path / "CON_.csv.gz").exists()
+    assert not [p.name for p in tmp_path.iterdir() if p.name.split(".")[0].upper() == "CON"]
+    (tmp_path / "CON_.csv.gz").rename(tmp_path / "CON.csv.gz")            # as saved by v1.19.2 and earlier
+    n = len(client.requests)
+    got = load_history(client, ["CON"], 5, tmp_path, now=now)
+    assert len(got["CON"]) and all(r[1] > client.requests[0][1] for r in client.requests[n:])  # found: only topped up
+    assert (tmp_path / "CON_.csv.gz").exists() and not (tmp_path / "CON.csv.gz").exists()
+    (tmp_path / "d").mkdir()
+    save_csv(full["AUX"], tmp_path / "d" / f"{file_stem('AUX')}.csv")       # the fetch command's files
+    assert list(load_dir(tmp_path / "d")) == ["AUX"]

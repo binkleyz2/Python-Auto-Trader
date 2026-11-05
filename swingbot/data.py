@@ -34,6 +34,30 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
     return df[COLS].astype(float)
 
 
+# Names Windows keeps for devices (CON = the console, PRN, AUX, NUL, COM1, LPT1...). A file called CON.csv
+# can't be opened normally and makes OneDrive stop syncing, and CON is a real ticker (Concentra), so files
+# named after a symbol get an underscore: CON_.csv.gz. Any extension counts (CON.txt is just as bad).
+WINDOWS_RESERVED = ({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+                    | {f"{d}{n}" for d in ("COM", "LPT") for n in "0123456789\u00b9\u00b2\u00b3"})
+
+
+def file_stem(symbol: str) -> str:
+    """A symbol as the start of a file name that's safe on Windows and OneDrive: CON -> CON_, BRK/B -> BRK_B."""
+    s = symbol.replace("/", "_")
+    base = s.split(".", 1)[0]
+    if base.upper() in WINDOWS_RESERVED:
+        s = base + "_" + s[len(base):]
+    return s
+
+
+def symbol_from_stem(stem: str) -> str:
+    """Undo file_stem's underscore: CON_ -> CON (BRK_B stays BRK_B; slashes can't be told apart)."""
+    base = stem.split(".", 1)[0]
+    if base.endswith("_") and base[:-1].upper() in WINDOWS_RESERVED:
+        stem = base[:-1] + stem[len(base):]
+    return stem
+
+
 def load_csv(path: str | Path) -> pd.DataFrame:
     """CSV with columns: timestamp,open,high,low,close,volume.
 
@@ -54,7 +78,7 @@ def load_dir(folder: str | Path, symbols: list[str] | None = None) -> dict[str, 
     folder = Path(folder)
     out = {}
     for p in sorted(folder.glob("*.csv")):
-        sym = p.stem.upper()
+        sym = symbol_from_stem(p.stem).upper()
         if symbols and sym not in symbols:
             continue
         out[sym] = load_csv(p)

@@ -4,6 +4,14 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.19.3 - 2026-11-04
+
+- **No more files Windows and OneDrive can't handle.** CON (Concentra) is a real ticker, but CON is also a
+  name Windows keeps for the console (as are PRN, AUX, NUL, COM1-9 and LPT1-9), whatever the extension, so
+  `CON.csv.gz` in the history cache stopped OneDrive syncing. Files named after such a symbol now get an
+  underscore (`CON_.csv.gz`); the history cache and `fetch` use it, and a `CON.csv.gz` from before is renamed
+  the next time it's used. Other symbols are unchanged, and the symbol itself is still CON everywhere else.
+
 ## v1.19.2 - 2026-11-04
 
 - **Dashboard: trailing-stop settings greyed out when `trail_stop: false`.** "Trail distance from swing
