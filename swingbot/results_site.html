@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>swingbot results</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --line: #2a78d6; --line-wash: rgba(42,120,214,0.10);
+    --good: #0ca30c; --bad: #d03b3b; --good-text: #006300; --bad-text: #b42d2d;
+    --hover: rgba(11,11,11,0.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --line: #3987e5; --line-wash: rgba(57,135,229,0.14);
+      --good: #0ca30c; --bad: #e05252; --good-text: #0ca30c; --bad-text: #e66767;
+      --hover: rgba(255,255,255,0.05);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --line: #3987e5; --line-wash: rgba(57,135,229,0.14);
+    --good: #0ca30c; --bad: #e05252; --good-text: #0ca30c; --bad-text: #e66767;
+    --hover: rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1680px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 14px; }
+  h1 { font-size: 28px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-2); }
+  .spacer { flex: 1; }
+  .updated { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  select, input[type=search] { font: inherit; color: var(--ink); background: var(--surface);
+          border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+  .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 1000px) { .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .tile { padding: 10px 12px; min-width: 0; }
+  .tile .k { font-size: 12px; color: var(--ink-2); }
+  .tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .tile .s { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .up { color: var(--good-text); } .down { color: var(--bad-text); }
+  .card { padding: 12px 14px; margin-bottom: 14px; min-width: 0; }
+  .card h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  .card .head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 8px; }
+  .card .note { color: var(--muted); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; }
+  @media (max-width: 1000px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 1000px) { .grid3 { grid-template-columns: minmax(0, 1fr); } }
+  .chart { position: relative; width: 100%; }
+  .chart canvas { display: block; width: 100%; }
+  #cv-equity { height: clamp(220px, 34vh, 520px); }
+  #cv-pnl { height: clamp(160px, 22vh, 340px); }
+  .tip { position: absolute; pointer-events: none; display: none; z-index: 2; min-width: 170px;
+         background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+         box-shadow: 0 4px 16px rgba(0,0,0,0.18); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .tip b { display: block; margin-bottom: 4px; }
+  .tip .r { display: flex; justify-content: space-between; gap: 14px; }
+  .tip .r span:first-child { color: var(--ink-2); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { font: inherit; font-size: 13px; border: 0; background: transparent; color: var(--ink-2);
+                padding: 3px 10px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+  .tw { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 8px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
+  th { font-size: 12px; font-weight: 600; color: var(--ink-2); position: sticky; top: 0; background: var(--surface); }
+  td.n, th.n { text-align: right; }
+  tbody tr:hover { background: var(--hover); }
+  a { color: var(--line); }
+  .links a + a { margin-left: 8px; }
+  .scroll { max-height: 560px; overflow: auto; }
+  .more { margin-top: 8px; }
+  .more button { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+                 border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  .empty { color: var(--muted); padding: 24px 0; text-align: center; }
+  ul.files { list-style: none; padding: 0; margin: 0; }
+  ul.files li { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--grid); font-size: 13px; min-width: 0; }
+  ul.files li a { overflow-wrap: anywhere; min-width: 0; }
+  ul.files li span { color: var(--muted); margin-left: auto; white-space: nowrap; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>swingbot results</h1>
+    <span class="sub" id="acct-label"></span>
+    <select id="acct" aria-label="Account" hidden></select>
+    <span class="spacer"></span>
+    <span class="updated" id="updated">Loading…</span>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <div class="head">
+      <h2>Account value at the end of each day</h2>
+      <span class="spacer"></span>
+      <span class="seg" id="range" role="group" aria-label="Period shown">
+        <button type="button" data-d="30">1M</button><button type="button" data-d="91">3M</button>
+        <button type="button" data-d="182">6M</button><button type="button" data-d="365">1Y</button>
+        <button type="button" data-d="0" aria-pressed="true">All</button>
+      </span>
+    </div>
+    <div class="chart"><canvas id="cv-equity" role="img" aria-label="Account value by day"></canvas><div class="tip" id="tip-equity"></div></div>
+  </div>
+
+  <div class="card">
+    <div class="head"><h2>The bot's P&amp;L each day</h2><span class="note">green = day up, red = day down</span></div>
+    <div class="chart"><canvas id="cv-pnl" role="img" aria-label="Bot profit and loss by day"></canvas><div class="tip" id="tip-pnl"></div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="head">
+        <h2>Results</h2>
+        <span class="seg" id="period" role="group" aria-label="Group by">
+          <button type="button" data-p="days" aria-pressed="true">Days</button>
+          <button type="button" data-p="weeks">Weeks</button><button type="button" data-p="months">Months</button>
+        </span>
+      </div>
+      <div class="tw scroll"><table id="results"></table></div>
+    </div>
+    <div class="card">
+      <div class="head"><h2>What's working</h2><span class="note">all trades in trades.csv</span></div>
+      <div class="tw"><table id="by-setup"></table></div>
+      <div style="height:12px"></div>
+      <div class="tw"><table id="by-exit"></table></div>
+      <div style="height:12px"></div>
+      <div class="tw"><table id="by-hour"></table></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="head">
+      <h2>Trades</h2><span class="note" id="trade-note"></span>
+      <span class="spacer"></span>
+      <input type="search" id="q" placeholder="Symbol or setup" aria-label="Filter trades">
+    </div>
+    <div class="tw scroll"><table id="trades"></table></div>
+    <div class="more" id="more" hidden><button type="button">Show more</button></div>
+  </div>
+
+  <div class="grid3">
+    <div class="card"><div class="head"><h2>Best and worst stocks</h2></div><div class="tw"><table id="by-symbol"></table></div></div>
+    <div class="card"><div class="head"><h2>Downloads</h2></div><ul class="files" id="downloads"></ul></div>
+    <div class="card"><div class="head"><h2>Backtest results</h2><span class="note" id="bt-note"></span></div>
+      <ul class="files scroll" id="backtests"></ul></div>
+  </div>
+  <footer id="foot"></footer>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let D = null, ACCT = null, RANGE = 0, PERIOD = "days", SHOWN = 100;
+const usd = (x, sign) => (x == null || isNaN(x)) ? "–" :
+  (sign && x > 0 ? "+" : x < 0 ? "−" : "") + "$" + Math.abs(x).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const usd0 = x => (x < 0 ? "−" : "") + "$" + Math.abs(x).toLocaleString(undefined, {maximumFractionDigits: 0});
+const pct = (x, sign = true) => (x == null || isNaN(x)) ? "–" : (sign && x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(x).toFixed(2) + "%";
+const cls = x => x > 0 ? "up" : x < 0 ? "down" : "";
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const dfmt = s => new Date(s + "T12:00:00").toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric", year: "numeric"});
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+
+async function load() {
+  try {
+    const r = await fetch("data.json", {cache: "no-store", credentials: "same-origin"});
+    if (!r.ok) throw new Error(r.status === 403 ? "add ?key=… to the address" : "HTTP " + r.status);
+    D = await r.json();
+  } catch (e) { $("updated").textContent = "Couldn't load the results (" + e.message + ")"; return; }
+  const names = Object.keys(D.accounts);
+  if (!ACCT || !D.accounts[ACCT]) ACCT = D.accounts[D.account] ? D.account : names[0];
+  const sel = $("acct");
+  sel.hidden = names.length < 2;
+  sel.replaceChildren(...names.map(n => el("option", {value: n, textContent: n, selected: n === ACCT})));
+  render();
+}
+
+function account() { return D && ACCT ? D.accounts[ACCT] : null; }
+
+function render() {
+  const a = account();
+  $("acct-label").textContent = ACCT ? ACCT.replace("-", " · ") : "";
+  $("updated").textContent = a ? `Last trading day ${dfmt(a.summary.last)} · page data ${D.generated}` :
+    `No results yet · page data ${D.generated}`;
+  $("foot").textContent = `swingbot v${D.version}. Rebuilt from the bot's files when they change; reload for the latest. ` + D.note;
+  tiles(a); charts(); table(); breakdowns(); trades(); files();
+}
+
+function tiles(a) {
+  const box = $("tiles");
+  if (!a) { box.replaceChildren(el("div", {className: "tile", textContent: "Nothing recorded yet - results appear after the first trading day."})); return; }
+  const s = a.summary;
+  const t = (k, v, sub, c = "") => el("div", {className: "tile"}, el("div", {className: "k", textContent: k}),
+                                    el("div", {className: "v " + c, textContent: v}), el("div", {className: "s", textContent: sub}));
+  box.replaceChildren(
+    t("Account value", usd(s.latest), `at the close ${dfmt(s.last)}`),
+    t("Change since start", usd(s.change, true), `${pct(s.change_pct)} from ${usd0(s.start)} on ${s.first}`, cls(s.change)),
+    t("Bot P&L", usd(s.bot_pnl, true), `closed trades, ${s.trading_days} trading days`, cls(s.bot_pnl)),
+    t("Trades", s.trades.toLocaleString(), `${s.win_pct.toFixed(1)}% winners (${s.wins} of ${s.trades})`),
+    t("Days up / down", `${s.up_days} / ${s.down_days}`, `best ${usd(s.best.pnl, true)} · worst ${usd(s.worst.pnl, true)}`),
+    t("Largest drop", pct(s.drawdown_pct, false), "peak to low, end-of-day values", s.drawdown_pct < 0 ? "down" : ""));
+}
+
+// ------------------------------------------------------------------ charts (canvas, with hover)
+function shown() {
+  const a = account(); if (!a) return [];
+  if (!RANGE) return a.days;
+  const last = new Date(a.summary.last + "T12:00:00"), from = new Date(last - RANGE * 864e5);
+  return a.days.filter(d => new Date(d.date + "T12:00:00") > from);
+}
+
+function setup(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, r.width, r.height);
+  return [g, r.width, r.height];
+}
+
+function niceTicks(lo, hi, n) {
+  const span = hi - lo || Math.abs(hi) || 1, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || 10 * mag;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+
+function frame(g, w, h, lo, hi, days, fmtY, bars = false) {
+  const font = Math.max(11, Math.min(14, w / 110));
+  g.font = `${font}px system-ui, sans-serif`;
+  const ticks = niceTicks(lo, hi, Math.max(3, Math.round(h / 60)));
+  const left = Math.max(...ticks.map(t => g.measureText(fmtY(t)).width)) + 14, right = 12, top = 10, bottom = font + 16;
+  const slot = (w - left - right) / Math.max(1, days.length);
+  const X = bars ? (i => left + slot * (i + 0.5))
+                 : (i => left + (days.length < 2 ? (w - left - right) / 2 : i * (w - left - right) / (days.length - 1)));
+  const Y = v => top + (hi - v) * (h - top - bottom) / (hi - lo || 1);
+  g.strokeStyle = css("--grid"); g.lineWidth = 1; g.fillStyle = css("--muted"); g.textBaseline = "middle"; g.textAlign = "right";
+  ticks.forEach(t => { if (t < lo - 1e-9 || t > hi + 1e-9) return;
+    g.beginPath(); g.moveTo(left, Math.round(Y(t)) + 0.5); g.lineTo(w - right, Math.round(Y(t)) + 0.5); g.stroke();
+    g.fillText(fmtY(t), left - 8, Y(t)); });
+  g.textBaseline = "top";
+  const every = Math.max(1, Math.ceil(days.length / Math.max(2, Math.floor((w - left) / 90))));
+  days.forEach((d, i) => { if (i % every && i !== days.length - 1) return;
+    if (i === days.length - 1 && i % every && days.length > every && (i % every) < every * 0.6) return;
+    const text = new Date(d.date + "T12:00:00").toLocaleDateString(undefined, {month: "short", day: "numeric"});
+    const half = g.measureText(text).width / 2;   // keep the first and last labels inside the chart
+    g.textAlign = "center";
+    g.fillText(text, Math.max(left + half, Math.min(w - right - half, X(i))), h - bottom + 6); });
+  return {X, Y, left, right, top, bottom, slot};
+}
+
+function tipRows(d) {
+  return [["Account value", usd(d.end)], ["Change that day", usd(d.change, true)], ["Bot P&L", usd(d.bot_pnl, true)],
+          ["Trades", `${d.trades} (${d.wins} won, ${d.losses} lost)`]];
+}
+
+function showTip(tip, wrap, x, y, d) {
+  tip.replaceChildren(el("b", {textContent: dfmt(d.date)}),
+    ...tipRows(d).map(([k, v]) => el("div", {className: "r"}, el("span", {textContent: k}), el("span", {textContent: v}))));
+  tip.style.display = "block";
+  const W = wrap.clientWidth, tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.max(0, Math.min(W - tw, x + 14 > W - tw ? x - tw - 14 : x + 14)) + "px";
+  tip.style.top = Math.max(0, y - th - 10) + "px";
+}
+
+function hover(cv, tip, days, geom, draw) {
+  const near = ev => {
+    const r = cv.getBoundingClientRect(), x = ev.clientX - r.left;
+    let best = 0, bd = Infinity;
+    days.forEach((d, i) => { const dx = Math.abs(geom.X(i) - x); if (dx < bd) { bd = dx; best = i; } });
+    return [best, x, ev.clientY - r.top];
+  };
+  cv.onpointermove = ev => { if (!days.length) return; const [i, , y] = near(ev); draw(i); showTip(tip, cv.parentNode, geom.X(i), y, days[i]); };
+  cv.onpointerleave = () => { tip.style.display = "none"; draw(-1); };
+}
+
+function charts() {
+  const days = shown();
+  // account value
+  const cv = $("cv-equity"), tip = $("tip-equity");
+  const drawEq = hi => {
+    const [g, w, h] = setup(cv);
+    if (!days.length) { g.fillStyle = css("--muted"); g.textAlign = "center"; g.font = "14px system-ui"; g.fillText("No days yet", w / 2, h / 2); return null; }
+    const vals = [days[0].start, ...days.map(d => d.end)];
+    let lo = Math.min(...vals), top = Math.max(...vals); const pad = (top - lo) * 0.08 || top * 0.01;
+    lo -= pad; top += pad;
+    const f = frame(g, w, h, lo, top, days, usd0);
+    const line = css("--line");
+    g.beginPath(); days.forEach((d, i) => i ? g.lineTo(f.X(i), f.Y(d.end)) : g.moveTo(f.X(i), f.Y(d.end)));
+    g.lineTo(f.X(days.length - 1), h - f.bottom); g.lineTo(f.X(0), h - f.bottom); g.closePath();
+    g.fillStyle = css("--line-wash"); g.fill();
+    g.beginPath(); days.forEach((d, i) => i ? g.lineTo(f.X(i), f.Y(d.end)) : g.moveTo(f.X(i), f.Y(d.end)));
+    g.strokeStyle = line; g.lineWidth = 2; g.lineJoin = "round"; g.stroke();
+    const dot = (i, r) => { g.beginPath(); g.arc(f.X(i), f.Y(days[i].end), r, 0, 7); g.fillStyle = line; g.fill();
+                            g.lineWidth = 2; g.strokeStyle = css("--surface"); g.stroke(); };
+    if (days.length <= 60) days.forEach((d, i) => dot(i, 3));
+    if (hi >= 0) {
+      g.strokeStyle = css("--axis"); g.lineWidth = 1; g.beginPath();
+      g.moveTo(Math.round(f.X(hi)) + 0.5, f.top); g.lineTo(Math.round(f.X(hi)) + 0.5, h - f.bottom); g.stroke(); dot(hi, 5);
+    }
+    // direct label on the last point
+    const L = days.length - 1; g.fillStyle = css("--ink"); g.font = "600 13px system-ui"; g.textAlign = "right"; g.textBaseline = "bottom";
+    g.fillText(usd0(days[L].end), Math.min(w - f.right, f.X(L)), f.Y(days[L].end) - 8);
+    return f;
+  };
+  const geq = drawEq(-1); if (geq) hover(cv, tip, days, geq, drawEq);
+
+  // daily P&L bars
+  const cp = $("cv-pnl"), tp = $("tip-pnl");
+  const drawP = hi => {
+    const [g, w, h] = setup(cp);
+    if (!days.length) return null;
+    const v = days.map(d => d.bot_pnl), span = Math.max(1, Math.max(0, ...v) - Math.min(0, ...v));
+    const lo = Math.min(0, ...v) - span * 0.08, top = Math.max(0, ...v) + span * 0.08;
+    const f = frame(g, w, h, lo, top, days, usd0, true);
+    const X = f.X, bw = Math.max(2, Math.min(40, f.slot - 2));
+    const z = f.Y(0);
+    days.forEach((d, i) => {
+      const y = f.Y(d.bot_pnl), x = X(i) - bw / 2, r = Math.min(4, bw / 2, Math.abs(y - z));
+      g.fillStyle = d.bot_pnl >= 0 ? css("--good") : css("--bad");
+      g.globalAlpha = hi < 0 || hi === i ? 1 : 0.45;
+      g.beginPath();
+      if (d.bot_pnl >= 0) { g.moveTo(x, z); g.lineTo(x, y + r); g.arcTo(x, y, x + r, y, r); g.lineTo(x + bw - r, y); g.arcTo(x + bw, y, x + bw, y + r, r); g.lineTo(x + bw, z); }
+      else { g.moveTo(x, z); g.lineTo(x, y - r); g.arcTo(x, y, x + r, y, r); g.lineTo(x + bw - r, y); g.arcTo(x + bw, y, x + bw, y - r, r); g.lineTo(x + bw, z); }
+      g.closePath(); g.fill();
+    });
+    g.globalAlpha = 1; g.strokeStyle = css("--axis"); g.beginPath(); g.moveTo(f.left, Math.round(z) + 0.5); g.lineTo(w - f.right, Math.round(z) + 0.5); g.stroke();
+    return f;
+  };
+  const gp = drawP(-1); if (gp) hover(cp, tp, days, gp, drawP);
+}
+
+// ------------------------------------------------------------------ tables
+function tableOf(t, cols, rows, empty) {
+  const head = el("thead", {}, el("tr", {}, ...cols.map(c => el("th", {className: c.n ? "n" : "", textContent: c.h}))));
+  const cell = (c, r) => {
+    const td = el("td", {className: (c.n ? "n " : "") + (c.c ? c.c(r) : "")});
+    const v = c.f(r);
+    if (v instanceof Node) td.append(v); else td.textContent = v;
+    return td;
+  };
+  const body = rows.length ? rows.map(r => el("tr", {}, ...cols.map(c => cell(c, r))))
+                           : [el("tr", {}, el("td", {colSpan: cols.length, className: "empty", textContent: empty}))];
+  t.replaceChildren(head, el("tbody", {}, ...body));
+}
+
+function table() {
+  const a = account();
+  const rows = a ? [...a[PERIOD]].reverse() : [];
+  const links = d => { const s = el("span", {className: "links"});
+    if (d.files && d.files.report) s.append(el("a", {href: d.files.report, target: "_blank", rel: "noopener", textContent: "report"}));
+    if (d.files && d.files.picture) s.append(el("a", {href: d.files.picture, target: "_blank", rel: "noopener", textContent: "dashboard"}));
+    return s; };
+  const first = PERIOD === "days" ? {h: "Date", f: d => dfmt(d.date)} :
+                PERIOD === "weeks" ? {h: "Week of", f: d => dfmt(d.period)} :
+                {h: "Month", f: d => new Date(d.period + "-15T12:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"})};
+  const cols = [first,
+    ...(PERIOD === "days" ? [] : [{h: "Days", n: 1, f: d => d.days}]),
+    {h: "End value", n: 1, f: d => usd(d.end)},
+    {h: "Change", n: 1, f: d => usd(d.change, true), c: d => cls(d.change)},
+    {h: "%", n: 1, f: d => pct(d.change_pct), c: d => cls(d.change_pct)},
+    {h: "Bot P&L", n: 1, f: d => usd(d.bot_pnl, true), c: d => cls(d.bot_pnl)},
+    {h: "Trades", n: 1, f: d => d.trades}, {h: "Won / lost", n: 1, f: d => `${d.wins} / ${d.losses}`},
+    ...(PERIOD === "days" ? [{h: "", f: links}] : [])];
+  tableOf($("results"), cols, rows, "No trading days recorded yet.");
+}
+
+function breakdowns() {
+  const b = D.breakdowns || {};
+  const cols = name => [{h: name, f: r => r.name}, {h: "Trades", n: 1, f: r => r.trades},
+    {h: "Win %", n: 1, f: r => r.win_pct.toFixed(1)}, {h: "Avg R", n: 1, f: r => (r.avg_r > 0 ? "+" : "") + r.avg_r.toFixed(2), c: r => cls(r.avg_r)},
+    {h: "Net", n: 1, f: r => usd(r.net, true), c: r => cls(r.net)}];
+  tableOf($("by-setup"), cols("Setup"), b.setup || [], "No trades yet.");
+  tableOf($("by-exit"), cols("Exit by"), b.exit || [], "No trades yet.");
+  tableOf($("by-hour"), cols("Entry hour (ET)"), b.hour || [], "No trades yet.");
+  const sy = b.symbol || [], pick = sy.length > 16 ? [...sy.slice(0, 8), ...sy.slice(-8)] : sy;
+  tableOf($("by-symbol"), cols("Stock"), pick, "No trades yet.");
+}
+
+function trades() {
+  const q = $("q").value.trim().toLowerCase();
+  const all = [...(D.trades || [])].reverse().filter(t => !q || t.symbol.toLowerCase().includes(q) || t.setup.includes(q));
+  $("trade-note").textContent = `${D.trade_count.toLocaleString()} in all` + (D.trade_count > D.trades.length ? ` (newest ${D.trades.length} here)` : "");
+  tableOf($("trades"), [
+    {h: "Closed", f: t => t.when}, {h: "Stock", f: t => t.symbol}, {h: "Setup", f: t => t.setup},
+    {h: "Shares", n: 1, f: t => t.shares.toLocaleString()}, {h: "Entry", n: 1, f: t => t.entry.toFixed(2)},
+    {h: "Stop", n: 1, f: t => t.initial_stop.toFixed(2)}, {h: "Exit", n: 1, f: t => t.exit.toFixed(2)},
+    {h: "Exit by", f: t => t.exit_by}, {h: "P&L", n: 1, f: t => usd(t.pnl, true), c: t => cls(t.pnl)},
+    {h: "R", n: 1, f: t => (t.r > 0 ? "+" : "") + t.r.toFixed(2), c: t => cls(t.r)}], all.slice(0, SHOWN),
+    q ? "No trades match." : "No trades yet.");
+  $("more").hidden = all.length <= SHOWN;
+}
+
+function files() {
+  const size = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+  const item = f => el("li", {}, el("a", {href: f.href, textContent: f.name}), el("span", {textContent: (f.when ? f.when + " · " : "") + size(f.size)}));
+  $("downloads").replaceChildren(...(D.downloads.length ? D.downloads.map(item) : [el("li", {className: "empty", textContent: "Nothing yet."})]));
+  $("backtests").replaceChildren(...(D.backtests.length ? D.backtests.map(item) : [el("li", {className: "empty", textContent: "No backtest zips yet."})]));
+  $("bt-note").textContent = D.backtests.length ? `${D.backtests.length} newest first` : "";
+}
+
+// ------------------------------------------------------------------ controls
+$("acct").onchange = e => { ACCT = e.target.value; render(); };
+$("range").onclick = e => { const b = e.target.closest("button"); if (!b) return;
+  RANGE = +b.dataset.d; $("range").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b)); charts(); };
+$("period").onclick = e => { const b = e.target.closest("button"); if (!b) return;
+  PERIOD = b.dataset.p; $("period").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b)); table(); };
+$("q").oninput = () => { SHOWN = 100; trades(); };
+$("more").querySelector("button").onclick = () => { SHOWN += 200; trades(); };
+let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => D && charts(), 120); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => D && charts());
+load();
+setInterval(load, 15 * 60 * 1000);          // an open page picks up a new day by itself
+</script>
+</body>
+</html>

@@ -4,6 +4,21 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.20.0 - 2026-11-04
+
+- **Results website, always on:** `py -m swingbot site --install` runs a second website, separate from the
+  daily dashboard, that shows every trading day's results as they build up: account value and daily P&L
+  charts (hover for the numbers), totals, every day/week/month with links to that day's report and dashboard
+  picture, every trade, what's working by setup / exit / entry hour, best and worst stocks, downloads and the
+  backtest zips. It reads the bot's own files each time it's opened, so each session shows up by itself.
+- https on port 4334 with `site_cert`: one PEM file holding the certificate and its private key (a key
+  password goes in `.env` as `SITE_CERT_PASSWORD`). A renewed certificate is used without a restart.
+- Access needs a key (`site_key`, or `dashboard_key` if blank), given once as `?key=`; the browser keeps it
+  for 30 days. 10 wrong keys lock that address out for 10 minutes. It serves only its own page and the bot's
+  results files - never config.yaml, .env or anything else - and it has nothing that can place orders.
+- `--install` starts it now and at every Windows logon (Startup folder, no window, no admin). Problems such
+  as a certificate OneDrive hasn't synced yet are retried. `--stop` and `--uninstall` too. Log: `logs/site.log`.
+
 ## v1.19.3 - 2026-11-04
 
 - **No more files Windows and OneDrive can't handle.** CON (Concentra) is a real ticker, but CON is also a

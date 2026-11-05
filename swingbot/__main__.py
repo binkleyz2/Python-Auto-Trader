@@ -9,6 +9,8 @@
   run --bars 1 --symbol NVDA  watch only NVDA, on 1-minute bars, starting now (works with --live too)
   run --live                trade today's session with orders (asks you to confirm). With broker: alpaca
                             and alpaca_paper: true these go to your Alpaca PAPER account (fake money).
+  site                      the results website (every day's results; https with site_cert). --install keeps
+                            it running (starts at logon), --stop / --uninstall
 """
 from __future__ import annotations
 
@@ -393,7 +395,7 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="swingbot", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", action="version", version=f"swingbot {__version__}")
-    ap.add_argument("command", choices=["demo", "backtest", "download", "fetch", "scan", "run"])
+    ap.add_argument("command", choices=["demo", "backtest", "download", "fetch", "scan", "run", "site"])
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--data", default="data")
     ap.add_argument("--out", default="backtests")
@@ -414,6 +416,10 @@ def main(argv=None) -> None:
                     help="backtest --try: gap between values in a range, e.g. --try breakeven_at_r=1-2 --step 0.5 "
                          "(1, 1.5, 2); --step breakeven_at_r=0.5 for just that setting. Whole-number settings "
                          "like swing_n keep steps of 1 unless given a whole step")
+    ap.add_argument("--install", action="store_true",
+                    help="site: start the results website now and every time you log on to Windows")
+    ap.add_argument("--uninstall", action="store_true", help="site: stop it and don't start it at logon any more")
+    ap.add_argument("--stop", action="store_true", help="site: stop the copy running in the background")
     args = ap.parse_args(argv)
 
     _env()
@@ -431,6 +437,11 @@ def main(argv=None) -> None:
 
     if args.command == "download":
         _download(cfg, args, workdir)
+        return
+
+    if args.command == "site":
+        from . import results_site
+        results_site.main(cfg, args, workdir)
         return
 
     if args.command in ("demo", "backtest"):

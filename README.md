@@ -71,6 +71,7 @@ python -m swingbot backtest --data data # backtest on the bars you've collected
 python -m swingbot scan                 # show this morning's ranking
 python -m swingbot run                  # dry run for today's session: real data, simulated fills, NO orders
 python -m swingbot run --live           # real orders (asks you to type LIVE)
+python -m swingbot site --install       # the always-on results website (see "Results website" below)
 ```
 
 **Shorter bars or a stock you picked yourself.** If a move catches your eye during the day:
@@ -266,6 +267,40 @@ Start the bot any time before 9:35 ET on trading days; 9:00 is a good choice. It
 ```
 
 On Windows, use Task Scheduler. Only add `--live --yes` once you trust the dry runs. The computer must stay awake and online all session.
+
+## Results website (always on)
+
+A second website, separate from the daily dashboard, shows every trading day's results as they build up:
+- the account value at the end of each day, and the bot's P&L each day (hover for the numbers; 1M/3M/6M/1Y/All)
+- totals: change since the start, bot P&L, trades and win rate, days up and down, the largest drop
+- every day, week and month, with links to that day's report and dashboard picture
+- every trade, what's working (by setup, by exit, by entry hour) and the best and worst stocks
+- downloads (results spreadsheet, `daily-results.csv`, `trades.csv`) and your backtest zips
+
+It reads the files the bot already writes each time a page is opened, so a new day appears after each
+session with nothing else to run; an open page refreshes itself every 15 minutes. It never connects to a
+broker and nothing on it can place orders.
+
+```bash
+py -m swingbot site               # run it in this window (Ctrl+C stops it)
+py -m swingbot site --install     # run it in the background, now and every time you log on to Windows
+py -m swingbot site --stop        # stop the background copy
+py -m swingbot site --uninstall   # stop it, and don't start it at logon any more
+```
+
+Settings in `config.yaml`:
+
+```yaml
+site_port: 4334
+site_cert: C:\Users\you\certs\both.txt   # one PEM file with the certificate AND its private key
+site_lan: true                            # other devices can view it (needs site_cert and a key)
+site_key:                                 # access key (blank = same as dashboard_key)
+```
+
+- **https:** with `site_cert` set it serves https on all network connections. A private key with a password: put it in `.env` as `SITE_CERT_PASSWORD`. A renewed certificate (the file replaced) is picked up within 5 minutes, without a restart. Open it by a name your certificate covers (a wildcard `*.example.com` certificate: e.g. `https://swingbot.example.com:4334/`), with that name pointing to this PC in your DNS or router; an IP address works but the browser will warn that the name doesn't match.
+- **Key:** open `https://<name>:4334/?key=<your key>` once on each device; the browser remembers it for 30 days and the key is taken out of the address. 10 wrong keys from one address lock it out for 10 minutes.
+- **Without `site_cert`** it's plain http at http://127.0.0.1:4334, on this PC only, with no key.
+- **Always on:** `--install` adds a small launcher to your Windows Startup folder (no window, no admin needed), so it starts when you log on. Problems are retried rather than ending it: for example, if OneDrive hasn't synced the certificate yet at logon, it starts once it has. The PC has to be on, awake and logged in for the site to be reachable. Windows may ask once whether Python may use the network: allow private networks. After a `git pull`, run `--install` again to restart it on the new version. Its log is `logs\site.log`.
 
 ## Things to know
 

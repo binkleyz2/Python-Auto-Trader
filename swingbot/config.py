@@ -90,6 +90,13 @@ class Config:
     smtp_host: str = "smtp.gmail.com"     # mail server (Gmail by default; login in .env: SMTP_USER, SMTP_PASSWORD)
     smtp_port: int = 587                  # 587 = STARTTLS, 465 = SSL
 
+    # --- Results website (py -m swingbot site): every day's results, always on, separate from the dashboard
+    site_port: int = 4334
+    site_cert: str = ""                   # PEM file with the certificate AND its private key -> https
+                                          # (blank = plain http, on this PC only)
+    site_lan: bool = True                 # other devices can view it (needs site_cert and a key)
+    site_key: str = ""                    # access key for the site (blank = use dashboard_key)
+
     # --- Backtest only -------------------------------------------------------------
     starting_equity: float = 25_000.0
     slippage_pct: float = 0.02            # % per side
@@ -114,6 +121,8 @@ class Config:
                 raise ValueError(f"{key} must be a time like \"12:45\", not {getattr(self, key)!r}") from None
         if not 1 <= int(self.scan_workers) <= 32:
             raise ValueError(f"scan_workers must be 1 to 32, not {self.scan_workers!r}")
+        if not 1 <= int(self.site_port) <= 65535:
+            raise ValueError(f"site_port must be 1 to 65535, not {self.site_port!r}")
         if self.email_report and not str(self.email_to).strip():
             raise ValueError("email_report is on but email_to is empty - say where to send the report")
         from .indexes import INDEXES

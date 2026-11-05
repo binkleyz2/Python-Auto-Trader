@@ -91,6 +91,15 @@ email_to:                   # e.g. you@example.com (several: separate with comma
 smtp_host: smtp.gmail.com
 smtp_port: 587
 
+# Results website: py -m swingbot site  (always on with: py -m swingbot site --install)
+# Every trading day's results, the trades, the day reports and backtest zips - separate from the dashboard.
+# https needs site_cert: one PEM file holding the certificate and its private key (e.g. a wildcard
+# certificate for your domain; open it as https://<name>.<your domain>:4334 so the name matches).
+site_port: 4334
+site_cert:                 # e.g. C:\Users\you\certs\both.pem   (blank = http, this PC only)
+site_lan: true             # true = other devices can view it (needs site_cert, and site_key or dashboard_key)
+site_key:                  # access key (blank = same as dashboard_key); a private key password goes in .env: SITE_CERT_PASSWORD
+
 # Backtest
 starting_equity: 25000
 slippage_pct: 0.02
