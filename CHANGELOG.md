@@ -4,6 +4,11 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.20.1 - 2026-11-05
+
+- **Dashboard: the "not used - trail_stop is off" note no longer repeats.** On the Trail step row it was
+  added again on every refresh (every 3 seconds), until it filled the page. It's now written once.
+
 ## v1.20.0 - 2026-11-04
 
 - **Results website, always on:** `py -m swingbot site --install` runs a second website, separate from the

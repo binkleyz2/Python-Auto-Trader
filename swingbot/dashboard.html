@@ -639,14 +639,15 @@ function renderSettings(s) {
     row.classList.toggle("changed", !!it.changed);
     row.classList.toggle("off", !!it.off);
     row.querySelectorAll("input, button").forEach(x => { x.disabled = !!it.off; });
+    const notes = [];                        // rebuilt from scratch on every refresh (never appended to)
     if (it.key) {
       if (inp) { if (!inp.dataset.dirty && document.activeElement !== inp) inp.value = it.value; }
       else v.textContent = (it.value === 0 && it.unit.includes("off") ? "off" : it.value + " " + it.unit.split(" (")[0]);
-      d.textContent = (it.changed ? `today only · config.yaml: ${it.default}` : "") +
-                      ((s.settings_pending || []).includes(it.key) ? " · applying…" : "");
+      if (it.changed) notes.push(`today only · config.yaml: ${it.default}`);
+      if ((s.settings_pending || []).includes(it.key)) notes.push("applying…");
     } else v.textContent = it.text;
-    if (it.note) d.textContent = (d.textContent ? d.textContent + " · " : "") + it.note;
-    else if (!it.key) d.textContent = "";
+    if (it.note) notes.push(it.note);
+    d.textContent = notes.join(" · ");
   }));
 }
 
