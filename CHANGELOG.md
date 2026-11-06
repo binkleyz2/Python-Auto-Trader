@@ -4,6 +4,13 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.25.2 - 2026-11-06
+
+- **Dashboard: where the stop can go is always on screen.** The Stop tile shows "Can move: 126.56 – 126.98",
+  updated with the price, and says when there's no room yet (the stop is already within `min_stop_pct` of the
+  price). This replaces the Move button's tooltip, which was cut off and disappeared too quickly. The Move
+  form's own message is no longer overwritten while you read it.
+
 ## v1.25.1 - 2026-11-06
 
 - **Dashboard buttons after a restart:** a page opened before the bot was restarted kept showing live numbers,

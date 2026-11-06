@@ -1797,7 +1797,7 @@ class Bot:
             can_close=bool(p) and not self.final and unreal > 0, close_pending=self.pending_close,
             stop_range=self.stop_range() if p and not self.final else None, stop_pending=self.pending_stop,
             stop_manual=bool(p and p.get("set_by_you")), stop_auto=not bool(p and p.get("manual_stop")),
-            stop_auto_default=bool(self.cfg.auto_stop_after_manual),
+            stop_auto_default=bool(self.cfg.auto_stop_after_manual), min_stop_pct=self.cfg.min_stop_pct,
             paused=self.paused, update=self.update,
             views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
             **self.view,
