@@ -1334,7 +1334,7 @@ class Bot:
             raise ValueError(f"the stop is already at {x:.2f}")
         return x
 
-    def request_stop(self, price) -> str:
+    def request_stop(self, price, auto=None) -> str:
         """Dashboard "Move" on the Stop tile (dashboard thread): checked, then queued for the main loop."""
         if self.final:
             raise ValueError("the session is over")
@@ -1347,14 +1347,18 @@ class Bot:
         if not x > 0:
             raise ValueError("enter a price, like 175.50")
         x = self._check_stop(x)
+        keep = self.cfg.auto_stop_after_manual if auto is None else bool(auto)
         self.pending_stop = x
-        log.info("Dashboard: move the %s stop from %.2f to %.2f requested", self.symbol, self.pos["stop"], x)
+        self.pending_stop_auto = keep
+        log.info("Dashboard: move the %s stop from %.2f to %.2f requested (%s)", self.symbol, self.pos["stop"], x,
+                 "the bot keeps tightening it" if keep else "left to you")
         return f"Moving the stop to {x:.2f}..."
 
     def move_stop_by_hand(self) -> None:
         """Main loop: check again at a fresh price, then move the stop order. Automatic moves (breakeven,
         trailing) then stop for this trade, so they don't undo it."""
         x, self.pending_stop = self.pending_stop, None
+        keep = getattr(self, "pending_stop_auto", self.cfg.auto_stop_after_manual)
         if x is None or not self.pos or self.final:
             return
         self.refresh_quote()
@@ -1365,9 +1369,15 @@ class Bot:
             return
         old = self.pos["stop"]
         if self.raise_stop(x, why="YOUR", force=True):
-            self.pos["manual_stop"] = True
-            log.info("Stop for %s moved by you: %.2f -> %.2f. Automatic stop moves (breakeven%s) are off for "
-                     "this trade.", self.symbol, old, self.pos["stop"], ", trailing" if self.cfg.trail_stop else "")
+            self.pos["set_by_you"] = True
+            self.pos["manual_stop"] = not keep                 # True = no automatic moves for this trade
+            if keep:
+                log.info("Stop for %s moved by you: %.2f -> %.2f. The bot keeps tightening it from there "
+                         "(breakeven%s; it only moves %s).", self.symbol, old, self.pos["stop"],
+                         ", trailing" if self.cfg.trail_stop else "", "up" if self.pos.get("side", 1) > 0 else "down")
+            else:
+                log.info("Stop for %s moved by you: %.2f -> %.2f. Automatic stop moves (breakeven%s) are off for "
+                         "this trade.", self.symbol, old, self.pos["stop"], ", trailing" if self.cfg.trail_stop else "")
             self.save_state()
 
     def breakeven(self, close: float) -> None:
@@ -1786,7 +1796,8 @@ class Bot:
             stale=self._stale_status(), watch=self._watch_rows(), can_rescan=not self.pos and not self.final, rescan_pending=self.pending_rescan,
             can_close=bool(p) and not self.final and unreal > 0, close_pending=self.pending_close,
             stop_range=self.stop_range() if p and not self.final else None, stop_pending=self.pending_stop,
-            stop_manual=bool(p and p.get("manual_stop")),
+            stop_manual=bool(p and p.get("set_by_you")), stop_auto=not bool(p and p.get("manual_stop")),
+            stop_auto_default=bool(self.cfg.auto_stop_after_manual),
             paused=self.paused, update=self.update,
             views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
             **self.view,

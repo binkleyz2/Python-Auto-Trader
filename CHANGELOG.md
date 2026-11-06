@@ -4,6 +4,14 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.25.0 - 2026-11-06
+
+- **After you move the stop, the bot can keep tightening it:** a tick box in the Move form, "then let the bot
+  keep tightening it". Ticked, breakeven and trailing keep working from your level (only ever up for a long,
+  down for a short); unticked, the stop is left to you as before. The new setting `auto_stop_after_manual`
+  (default `false`: left to you) decides whether it starts ticked. The Stop tile says "set by you, bot
+  tightening" when it's on.
+
 ## v1.24.0 - 2026-11-06
 
 - **Move the stop yourself:** a **Move** button on the dashboard's Stop tile while a trade is open. Type a

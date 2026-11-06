@@ -52,6 +52,8 @@ class Config:
     breakeven_at_r: float = 1.0           # once price is this many R above entry, stop goes to entry (0 = off)
     trail_buffer_atr: float | None = None # trailing stop sits this far below each swing low (blank = stop_buffer_atr)
     trail_min_step_atr: float = 0.1       # only move the stop if it rises at least this many ATRs
+    auto_stop_after_manual: bool = False  # after you move the stop on the dashboard: False = leave it to you,
+                                          # True = breakeven and trailing keep tightening it from there
     use_target: bool = False              # fixed take-profit at reward_risk x risk (off = let winners run)
     reward_risk: float = 2.0              # take-profit multiple, only used when use_target is true
     stop_buffer_atr: float = 0.25         # stop sits this far below the line / swing low

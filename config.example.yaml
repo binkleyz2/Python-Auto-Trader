@@ -54,6 +54,9 @@ min_stop_pct: 0.25   # stop at least this % below the price; 0 = off
 trail_stop: true
 trail_buffer_atr:              # trailing stop this far under each swing low, in ATR (blank = stop_buffer_atr)
 trail_min_step_atr: 0.1        # ignore stop raises smaller than this (fewer order changes)
+auto_stop_after_manual: false  # after you move the stop with "Move" on the dashboard: false = the bot leaves it
+                               # to you; true = breakeven and trailing keep tightening it (up for a long, down for
+                               # a short). The Move form has a tick box to choose each time; this is its default.
 breakeven_at_r: 1.0            # once price is 1R above entry, stop moves up to the entry price (0 = off)
 use_target: false              # true = also take profit at reward_risk x the risk
 reward_risk: 2.0

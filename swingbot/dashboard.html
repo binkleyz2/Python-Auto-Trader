@@ -62,6 +62,8 @@
   .stopform input { width: 6em; min-width: 0; font: inherit; font-size: 13px; padding: 1px 5px; color: var(--ink);
                     background: var(--surface); border: 1px solid var(--border); border-radius: 5px; }
   .tile .stopform .s { flex-basis: 100%; white-space: normal; overflow: visible; text-overflow: clip; }
+  .stopform label.keep { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--ink-2); }
+  .stopform label.keep input { width: auto; margin: 0; }
   .stopform .tbtn { margin-left: 0; }
   .tile .s { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .up { color: var(--good-text); } .down { color: var(--bad-text); }
@@ -147,6 +149,7 @@
          <form id="stopform" class="stopform" hidden autocomplete="off">
            <input id="stopval" type="number" step="0.01" inputmode="decimal" aria-label="New stop price">
            <button type="submit" class="tbtn mv">Set</button><button type="button" id="stopcancel" class="tbtn x">Cancel</button>
+           <label class="s keep"><input type="checkbox" id="stopauto"> then let the bot keep tightening it</label>
            <div class="s" id="stophint"></div>
          </form></div>
     <div class="tile"><div class="k">Day P&amp;L</div><div class="v" id="t-day">–</div><div class="s" id="t-day-s"></div></div>
@@ -263,7 +266,7 @@ function renderTop(s) {
     const locked = (p.stop - p.entry) * p.shares * side;
     let sub = dist == null ? "" : `${fmt(dist)} ${side < 0 ? "above" : "below"} last`;
     if ((p.stop - p.init_stop) * side > 0) sub += locked >= 0 ? ` · locks ${signed(locked)}` : ` · moved ${p.stop_steps.length - 1}×`;
-    if (s.stop_manual) sub += " · set by you";
+    if (s.stop_manual) sub += s.stop_auto ? " · set by you, bot tightening" : " · set by you";
     if (s.stop_pending != null) sub += ` · moving to ${fmt(s.stop_pending)}…`;
     setText("t-stop-s", sub);
     const mv = $("mvstop");
@@ -273,7 +276,7 @@ function renderTop(s) {
                             : "No room to move it: the price is too close to the initial stop";
     if (!$("stopform").hidden && s.stop_range) {
       const [lo, hi] = s.stop_range;
-      $("stophint").textContent = `${fmt(lo)} to ${fmt(hi)}. After you set it, the bot stops moving this trade's stop itself.`;
+      $("stophint").textContent = stopHint(lo, hi);
     }
   } else {
     setText("t-pos", "Flat");
@@ -579,11 +582,19 @@ $("mvstop").addEventListener("click", () => {
   f.hidden = !f.hidden;
   if (!f.hidden && S && S.pos) {
     $("stopval").value = (+S.pos.stop).toFixed(2);
+    $("stopauto").checked = !!S.stop_auto_default;
     const [lo, hi] = S.stop_range || [0, 0];
-    $("stophint").textContent = `${fmt(lo)} to ${fmt(hi)}. After you set it, the bot stops moving this trade's stop itself.`;
+    $("stophint").textContent = stopHint(lo, hi);
     $("stopval").focus(); $("stopval").select();
   }
 });
+function stopHint(lo, hi) {
+  const side = S && S.pos && S.pos.side < 0 ? "down" : "up";
+  return `${fmt(lo)} to ${fmt(hi)}. ` + ($("stopauto").checked
+    ? `After you set it, breakeven and trailing keep moving it, only ${side}.`
+    : "After you set it, the bot leaves this trade's stop to you.");
+}
+$("stopauto").addEventListener("change", () => { const r = S && S.stop_range; if (r) $("stophint").textContent = stopHint(r[0], r[1]); });
 $("stopcancel").addEventListener("click", () => { $("stopform").hidden = true; });
 $("stopform").addEventListener("submit", async ev => {
   ev.preventDefault();
@@ -592,10 +603,11 @@ $("stopform").addEventListener("submit", async ev => {
   const risk = (p.entry - v) * p.shares * (p.side || 1);
   if (!confirm(`Move the ${S.symbol} stop from ${fmt(p.stop)} to ${fmt(v)}?\n\n` +
                (risk > 0 ? `If it's hit, the trade loses about ${money(risk)}.` : `If it's hit, the trade keeps about ${money(-risk)}.`) +
-               `\n\nAfter this, the bot won't move this trade's stop by itself (no breakeven or trailing).`)) return;
+               ($("stopauto").checked ? `\n\nAfter this, breakeven and trailing keep tightening it (only ${p.side < 0 ? "down" : "up"}).`
+                                      : `\n\nAfter this, the bot won't move this trade's stop by itself (no breakeven or trailing).`))) return;
   $("stophint").textContent = "sending…";
   try {
-    const [ok, msg] = await control("stop", {price: v});
+    const [ok, msg] = await control("stop", {price: v, auto: $("stopauto").checked});
     $("stophint").textContent = msg;
     if (ok) setTimeout(() => { $("stopform").hidden = true; }, 1500);
   } catch (e) { $("stophint").textContent = "couldn't reach the bot"; }

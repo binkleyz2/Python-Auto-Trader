@@ -219,3 +219,38 @@ def test_manual_stop_turns_off_automatic_moves(tmp_path):
     assert bot.pos["stop"] == 20.5 and bot.pos["manual_stop"]
     src = open(live.__file__, encoding="utf-8").read()
     assert "not manual and self.symbol in frames" in src and "cfg.trail_stop and not manual" in src
+
+
+def test_manual_stop_can_be_left_to_the_bot_to_keep_tightening(tmp_path):
+    def trade(cfg):
+        bot = live.Bot(None, cfg, live=False, workdir=tmp_path)
+        bot.symbol = "AAA"
+        bot.pos = dict(kind="bounce", side=1, shares=10, entry=20.0, stop=19.0, init_stop=19.0, target=None,
+                       entry_x=3, entry_clock="10:00", stop_steps=[[3, 19.0]])
+        bot.last_price = 20.4
+        bot.refresh_quote = lambda: None
+        return bot
+
+    bot = trade(Config(breakeven_at_r=1.0))                            # default: left to you
+    bot.request_stop(19.4)
+    bot.move_stop_by_hand()
+    st = bot.status()
+    assert bot.pos["manual_stop"] and st["stop_manual"] and not st["stop_auto"] and not st["stop_auto_default"]
+
+    bot = trade(Config(breakeven_at_r=1.0))
+    bot.request_stop(19.4, auto=True)                                  # ticked in the Move form
+    bot.move_stop_by_hand()
+    st = bot.status()
+    assert not bot.pos["manual_stop"] and st["stop_manual"] and st["stop_auto"]
+    bot.breakeven(21.2)                                                # 1.2R ahead: breakeven still works, upward
+    assert bot.pos["stop"] == 20.0
+
+    bot = trade(Config(auto_stop_after_manual=True))                   # the setting makes it the default
+    assert bot.status()["stop_auto_default"]
+    bot.request_stop(19.4)
+    bot.move_stop_by_hand()
+    assert not bot.pos["manual_stop"]
+    bot = trade(Config(auto_stop_after_manual=True))
+    bot.request_stop(19.4, auto=False)                                 # ...unless unticked for this move
+    bot.move_stop_by_hand()
+    assert bot.pos["manual_stop"]

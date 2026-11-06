@@ -136,7 +136,7 @@ class Dashboard:
                     elif url.path == "/pause":
                         msg = handler(bool(body["paused"]))
                     elif url.path == "/stop":
-                        msg = handler(body["price"])
+                        msg = handler(body["price"], body.get("auto"))
                     else:
                         msg = handler()
                 except (ValueError, KeyError, TypeError) as e:
