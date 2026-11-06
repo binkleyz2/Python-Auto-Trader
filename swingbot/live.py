@@ -34,7 +34,7 @@ from . import __version__
 from .backtest import position_size
 from .config import Config
 from .data import fetch_public, normalize
-from .scanner import avg_dollar_volume, scan
+from .scanner import avg_dollar_volume, one_per_company, scan
 from .strategy import (add_indicators, better_stop, find_swings, mirror, resistance_line, sided_breakeven_stop,
                        sided_trailing_stop, signals_at, support_line, target_for)
 
@@ -250,7 +250,12 @@ class Bot:
         """Watch the best-ranked symbols from self.scan_results. False if nothing has a setup."""
         for r in self.scan_results[:25]:                             # best 25 (the log stays readable)
             log.info("scan %-6s score=%.2f %-16s %s", r.symbol, r.score, r.setup, r.detail)
-        good = [r for r in self.scan_results if r.score > 0][:max(1, int(self.cfg.watch_count))]
+        skipped: list = []
+        good = one_per_company([r for r in self.scan_results if r.score > 0], max(1, int(self.cfg.watch_count)),
+                               key=lambda r: r.symbol, extra=self.cfg.same_company, skipped=skipped)
+        for sym, kept in skipped:
+            log.info("Not watching %s: same company as %s, which ranked higher - the next stock is watched instead",
+                     sym, kept)
         if not good:
             log.info("No symbol has a setup. Nothing to trade.")
             return False

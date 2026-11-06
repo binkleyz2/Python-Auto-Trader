@@ -29,6 +29,7 @@ class Config:
     min_price: float = 10.0               # skip stocks under this price
     min_avg_dollar_volume: float = 50e6   # skip thin stocks (avg daily $ volume)
     watch_count: int = 5                  # watch this many top-ranked symbols for entries (1 = only the top pick)
+    same_company: list = field(default_factory=list)  # more share-class pairs to treat as one stock, [[A, B]]
     public_rate_limit: float = 8.0        # Public price data: at most this many requests per second
     scan_workers: int = 10                # morning scan: download this many symbols' bars at once (1-32)
 

@@ -112,3 +112,40 @@ def scan(history: dict[str, pd.DataFrame], cfg: Config, dollar_volume: dict | No
 def pick(history: dict[str, pd.DataFrame], cfg: Config, dollar_volume: dict | None = None) -> ScanResult | None:
     ranked = scan(history, cfg, dollar_volume)
     return ranked[0] if ranked and ranked[0].score > 0 else None
+
+
+# ------------------------------------------------------------------ one stock per company
+# Share classes of the same company move together, so watching both is watching one stock twice.
+# Classes written with a dot (BRK.A / BRK.B, LEN / LEN.B) are matched by the part before the dot; these are
+# the ones with different tickers. Add your own in config.yaml: same_company: [[ABC, ABCD]].
+SHARE_CLASSES = [
+    ("GOOG", "GOOGL"), ("FOX", "FOXA"), ("NWS", "NWSA"), ("UA", "UAA"), ("Z", "ZG"), ("LBRDA", "LBRDK"),
+    ("FWONA", "FWONK"), ("LILA", "LILAK"), ("BATRA", "BATRK"), ("RUSHA", "RUSHB"), ("KELYA", "KELYB"),
+    ("LSXMA", "LSXMK"), ("QRTEA", "QRTEB"), ("DISCA", "DISCK"), ("VIAC", "VIACA"), ("PARA", "PARAA"),
+    ("BIO", "BIO.B"), ("MKC", "MKC.V"), ("GEF", "GEF.B"), ("HEI", "HEI.A"), ("TAP", "TAP.A"),
+]
+
+
+def company_key(symbol: str, extra=()) -> str:
+    s = str(symbol).upper().replace("/", ".")
+    for group in list(SHARE_CLASSES) + [tuple(g) for g in (extra or ())]:
+        if s in {str(x).upper().replace("/", ".") for x in group}:
+            return "|".join(sorted(str(x).upper() for x in group))
+    return s.split(".", 1)[0] if "." in s else s
+
+
+def one_per_company(symbols: list, n: int, key=lambda x: x, extra=(), skipped: list | None = None) -> list:
+    """The first ``n`` of ``symbols`` (best first), skipping a second share class of a company already in."""
+    out, seen = [], {}
+    for item in symbols:
+        sym = key(item)
+        k = company_key(sym, extra)
+        if k in seen:
+            if skipped is not None:
+                skipped.append((sym, seen[k]))
+            continue
+        seen[k] = sym
+        out.append(item)
+        if len(out) >= n:
+            break
+    return out

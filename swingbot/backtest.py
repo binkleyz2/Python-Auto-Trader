@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .scanner import avg_dollar_volume, scan
+from .scanner import avg_dollar_volume, one_per_company, scan
 from .strategy import (add_indicators, better_stop, cols, find_swings, mirror, sided_breakeven_stop, sided_trailing_stop,
                        signals_at, target_for)
 
@@ -250,7 +250,7 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
             ranked = [(r.symbol, r.score, r.setup, r.detail) for r in scan(prior, cfg, pre=pre) if r.score > 0]
             if scan_cache is not None:
                 scan_cache[ck] = ranked
-        watched = ranked[:max(1, int(cfg.watch_count))]
+        watched = one_per_company(ranked, max(1, int(cfg.watch_count)), key=lambda w: w[0], extra=cfg.same_company)
         picks.append({"date": str(day), "symbol": watched[0][0] if watched else None,
                       "setup": watched[0][2] if watched else "none", "detail": watched[0][3] if watched else "",
                       "watched": [w[0] for w in watched]})
@@ -287,7 +287,8 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
                     scan_cache[ck2] = ranked2
             if not ranked2:
                 return None                               # no setups: keep the morning list (as live)
-            new = [w[0] for w in ranked2[:max(1, int(cfg.watch_count))]]
+            new = [w[0] for w in one_per_company(ranked2, max(1, int(cfg.watch_count)), key=lambda w: w[0],
+                                                  extra=cfg.same_company)]
             pick["midday"] = dict(time=ts.strftime("%H:%M"), watched=new)
             return sessions_for(new)
 

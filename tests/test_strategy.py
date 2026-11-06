@@ -177,3 +177,18 @@ def test_breakeven_in_the_live_loop(tmp_path, monkeypatch):
                    signal_ts=None, entry_x=0.0, entry_clock="10:00", stop_steps=[[0.0, entry - 1.0]])
     bot.step()
     assert bot.pos["stop"] == pytest.approx(entry, abs=0.01) and len(bot.pos["stop_steps"]) == 2
+
+
+def test_one_stock_per_company():
+    from swingbot.scanner import company_key, one_per_company
+    assert company_key("GOOG") == company_key("GOOGL") != company_key("AAPL")
+    assert company_key("BRK.A") == company_key("BRK.B") == company_key("BRK/B")
+    assert company_key("LEN") == company_key("LEN.B") and company_key("FOX") == company_key("FOXA")
+    assert company_key("ABC") != company_key("ABCD") and company_key("ABC", [["ABC", "ABCD"]]) == company_key("ABCD", [["abcd", "abc"]])
+    ranked = ["NVDA", "GOOGL", "MSFT", "GOOG", "AMZN", "BRK.B", "BRK.A", "META"]
+    skipped = []
+    got = one_per_company(ranked, 5, skipped=skipped)
+    assert got == ["NVDA", "GOOGL", "MSFT", "AMZN", "BRK.B"] and skipped == [("GOOG", "GOOGL")]
+    assert one_per_company(ranked, 10) == ["NVDA", "GOOGL", "MSFT", "AMZN", "BRK.B", "META"]
+    rows = [("GOOG", 0.9), ("GOOGL", 0.8), ("AAPL", 0.7)]
+    assert one_per_company(rows, 2, key=lambda r: r[0]) == [("GOOG", 0.9), ("AAPL", 0.7)]

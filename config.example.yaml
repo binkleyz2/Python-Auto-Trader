@@ -29,6 +29,9 @@ watchlist_indexes: []        # e.g. [sp500, dow, nasdaq100, nasdaq, russell2000]
 min_price: 10
 min_avg_dollar_volume: 10000000
 watch_count: 5
+# One stock per company: if two share classes make the list (GOOG and GOOGL, BRK.A and BRK.B), only the
+# better-ranked one is watched and the next stock fills the place. Add pairs it doesn't know here:
+same_company: []           # e.g. [[ABC, ABCD]]
 scan_workers: 15
 public_rate_limit: 8         # Public price data: at most 8 requests per second (it refuses bursts)
 bar_minutes: 5               # Public's price data: 5, 10, 15 or 30 (no 1-3 minute history)

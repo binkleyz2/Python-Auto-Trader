@@ -85,7 +85,10 @@ current trend lines (below) and scores how close the price sits to one:
 - either way, +0.15 for each extra time the price has touched the line since it was drawn (up to 3): a
   line that has held more often counts for more.
 
-The `watch_count` (5) best-scoring stocks are watched today. The log and dashboard show the list with each
+The `watch_count` (5) best-scoring stocks are watched today, **one per company**: if two share classes of the
+same company make the list (GOOG and GOOGL, BRK.A and BRK.B), only the better-ranked one is watched and the next
+stock on the list takes the other place. Classes written with a dot are matched automatically and the common
+pairs with different tickers are built in; add others with `same_company: [[ABC, ABCD]]`. The log and dashboard show the list with each
 stock's setup ("0.47 ATR above rising support, 4 extra touches").
 
 ### 2. Swing points

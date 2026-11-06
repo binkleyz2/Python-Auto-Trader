@@ -337,3 +337,15 @@ def test_breakeven_moves_the_stop_once(tmp_path, monkeypatch, caplog, side, stop
     stops = b.open_stops()
     assert len(stops) == 1 and stops[0].stop_price == Decimal(moved)
     assert len(b.sent) <= sent + 1                                # one reprice at most, not one per bar
+
+
+def test_second_share_class_makes_room_for_the_next_stock(tmp_path, caplog):
+    from swingbot.scanner import ScanResult
+    syms = ["GOOGL", "NVDA", "GOOG", "MSFT", "AMZN"]
+    hist = {s: synthetic(s, days=4, seed=i) for i, s in enumerate(syms)}
+    bot = live.Bot(None, Config(watch_count=3), live=False, workdir=tmp_path)
+    bot.scan_results = [ScanResult(s, 1.0 - i / 10, "near support", 100.0, "x") for i, s in enumerate(syms)]
+    with caplog.at_level("INFO"):
+        assert bot._take_scan(hist, "morning")
+    assert bot.watch == ["GOOGL", "NVDA", "MSFT"]
+    assert "Not watching GOOG: same company as GOOGL" in caplog.text

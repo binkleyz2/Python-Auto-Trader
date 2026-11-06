@@ -4,6 +4,14 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.27.0 - 2026-11-06
+
+- **One stock per company on the watch list.** When two share classes of the same company both rank in the top
+  `watch_count` (GOOG and GOOGL, BRK.A and BRK.B, FOX and FOXA...), only the better-ranked one is watched and
+  the next stock on the list is watched instead; the log says "Not watching GOOG: same company as GOOGL".
+  Classes written with a dot are matched automatically and the common pairs with different tickers are built in;
+  add others with `same_company: [[ABC, ABCD]]`. The midday rescan and backtests do the same.
+
 ## v1.26.0 - 2026-11-06
 
 - **A stop you set yourself can go right up to the price:** one cent under it for a long (over it for a
