@@ -4,6 +4,16 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.25.1 - 2026-11-06
+
+- **Dashboard buttons after a restart:** a page opened before the bot was restarted kept showing live numbers,
+  but its buttons (Close now, Move, Pause...) were turned down with a message that vanished at the next refresh,
+  so it looked like nothing happened. The page now reloads itself as soon as it sees the bot has restarted, and
+  if a button is pressed on an old page anyway, it reloads and says to press it again.
+- **Button answers stay on screen:** what the bot says back to a button ("Closing MSTR...", or why not) shows in
+  a box at the top of the page for 8 seconds (15 for a refusal), instead of being overwritten a moment later.
+- **The log records refusals:** a button the bot turned down, and why, is now in the log.
+
 ## v1.25.0 - 2026-11-06
 
 - **After you move the stop, the bot can keep tightening it:** a tick box in the Move form, "then let the bot

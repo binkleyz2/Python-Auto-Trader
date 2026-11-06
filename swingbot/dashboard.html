@@ -42,6 +42,12 @@
   .banner { display: none; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
             border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
   .banner.show { display: block; }
+  .toast { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 50; display: none;
+           max-width: min(560px, calc(100vw - 32px)); padding: 9px 14px; border-radius: 8px; font-size: 14px;
+           background: var(--surface); color: var(--ink); border: 1px solid var(--entry);
+           box-shadow: 0 6px 24px rgba(0,0,0,0.25); }
+  .toast.show { display: block; }
+  .toast.bad { border-color: var(--stop); color: var(--bad-text); }
   .banner::before { content: "⚠ "; color: var(--warn); }
   .banner.info::before { content: "ⓘ "; color: var(--entry); }
   .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -136,6 +142,7 @@
     <span class="updated" id="updated"></span>
   </header>
   <div class="banner" id="banner"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <section class="tiles">
     <div class="tile"><div class="k">Position</div><div class="v" id="t-pos">–</div><div class="s" id="t-pos-s"></div></div>
@@ -555,7 +562,17 @@ async function control(path, body) {
     body: JSON.stringify(body),
   });
   const res = await r.json().catch(() => ({}));
-  return [r.ok, res.message || (r.ok ? "" : "refused")];
+  const msg = res.message || (r.ok ? "" : "refused");
+  toast(msg || "done", !r.ok);
+  if (res.reload) setTimeout(() => location.reload(), 2500);     // the bot restarted: get a fresh page
+  return [r.ok, msg];
+}
+let toastTimer = null;
+function toast(msg, bad) {        // the answer to a button, on screen long enough to read it
+  const t = $("toast");
+  t.textContent = msg; t.className = "toast show" + (bad ? " bad" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = "toast"; }, bad ? 15000 : 8000);
 }
 $("rescan").addEventListener("click", async () => {
   if (!confirm("Rescan the watchlist using today's prices?\n\nThe bot then watches the new best setups. It only does this when not in a trade.")) return;
@@ -808,6 +825,7 @@ function renderBanner(s) {
 
 function render(s) { S = s; renderTop(s); renderChart(s); renderTables(s); renderBanner(s); }
 
+let RUN_ID = null;
 async function poll() {
   try {
     const q = new URLSearchParams();
@@ -817,6 +835,10 @@ async function poll() {
     const r = await fetch("status.json" + (q.toString() ? "?" + q : ""), {cache: "no-store"});
     if (!r.ok) throw new Error(r.status);
     const s = await r.json();
+    if (s.run_id) {                 // the bot restarted since this page loaded: reload, so the buttons work
+      if (RUN_ID && s.run_id !== RUN_ID && !document.querySelector("input:focus")) { location.reload(); return; }
+      RUN_ID = RUN_ID || s.run_id;
+    }
     failing = false; lastOk = Date.now();
     render(s);
   } catch (e) {

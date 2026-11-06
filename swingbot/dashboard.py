@@ -31,6 +31,9 @@ ET = ZoneInfo("America/New_York")
 PAGE = Path(__file__).with_name("dashboard.html")
 
 
+_log = logging.getLogger("swingbot")
+
+
 class _EventLog(logging.Handler):
     """Keeps the bot's recent log lines for the page's activity panel."""
 
@@ -59,6 +62,7 @@ class Dashboard:
         self.on_stop = None                     # set by the bot: callable(price) -> message (moves the stop)
         self._chart_json: dict[str, bytes] = {} # status with another watched symbol's chart
         self.token = secrets.token_urlsafe(18)  # proves a change came from a page this server served
+        self.run_id = secrets.token_hex(6)      # not secret: a page that sees it change reloads itself
         # On the network a key is always required; one is generated if you didn't set one.
         self.key = (key or secrets.token_urlsafe(9)) if lan else key
         self._json = b"{}"
@@ -122,7 +126,10 @@ class Dashboard:
                     return
                 given = self.headers.get("X-Swingbot-Token") or ""
                 if not hmac.compare_digest(given.encode(), dash.token.encode()):
-                    self._json_reply(403, {"message": "page is out of date - reload it"})
+                    _log.warning("Dashboard: %s refused - the page was opened before the bot restarted "
+                                 "(it reloads itself now)", url.path.strip("/"))
+                    self._json_reply(403, {"message": "the page was out of date - it's reloading; press it again",
+                                           "reload": True})
                     return
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
@@ -140,9 +147,11 @@ class Dashboard:
                     else:
                         msg = handler()
                 except (ValueError, KeyError, TypeError) as e:
+                    _log.info("Dashboard: %s not done - %s", url.path.strip("/"), e or "bad request")
                     self._json_reply(400, {"message": str(e) or "bad request"})
                     return
                 except Exception as e:                      # never let the page crash the bot
+                    _log.warning("Dashboard: %s failed - %s", url.path.strip("/"), e)
                     self._json_reply(500, {"message": f"failed: {e}"})
                     return
                 self._json_reply(200, {"message": msg})
@@ -210,7 +219,7 @@ class Dashboard:
 
     # ---------------------------------------------------------------- data
     def update(self, status: dict) -> None:
-        status = dict(status, events=list(self.events.events)[::-1])
+        status = dict(status, events=list(self.events.events)[::-1], run_id=self.run_id)
         views = status.pop("views", None) or {}
         status["chart_symbol"] = status.get("symbol")
         data = json.dumps(status, default=_jsonable).encode()

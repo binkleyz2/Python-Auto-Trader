@@ -254,3 +254,28 @@ def test_manual_stop_can_be_left_to_the_bot_to_keep_tightening(tmp_path):
     bot.request_stop(19.4, auto=False)                                 # ...unless unticked for this move
     bot.move_stop_by_hand()
     assert bot.pos["manual_stop"]
+
+
+def test_a_page_from_before_a_restart_is_told_to_reload(tmp_path, caplog):
+    bot = live.Bot(None, Config(), live=False, workdir=tmp_path)
+    d = Dashboard(8883)
+    d.on_close = bot.request_close
+    d.start()
+    try:
+        d.update(bot.status())
+        with urllib.request.urlopen(f"http://127.0.0.1:{d.port}/status.json") as r:
+            assert json.loads(r.read())["run_id"] == d.run_id
+        req = urllib.request.Request(f"http://127.0.0.1:{d.port}/close", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json", "X-Swingbot-Token": "old-token"})
+        with caplog.at_level("INFO"), pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        body = json.loads(e.value.read())
+        assert e.value.code == 403 and body["reload"] and "reloading" in body["message"]
+        assert "close refused - the page was opened before the bot restarted" in caplog.text
+        req = urllib.request.Request(f"http://127.0.0.1:{d.port}/close", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json", "X-Swingbot-Token": d.token})
+        with caplog.at_level("INFO"), pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(req)
+        assert "close not done - there's no open trade" in caplog.text           # the bot's answer is logged too
+    finally:
+        d.stop()
