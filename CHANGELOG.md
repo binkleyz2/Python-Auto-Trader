@@ -4,6 +4,28 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.22.0 - 2026-11-05
+
+- **Alerts** by phone push (the free ntfy app) and/or email: anything the bot logs as an error (an order it
+  couldn't confirm, a stop it couldn't move...), a refused entry, a stop it had to place itself, the day report
+  not sent. Set `ntfy_topic` and/or `alert_email: true`; test with `py -m swingbot.notify`. No repeats within
+  15 minutes, at most 30 a day, sent in the background.
+- **Trade pushes** (optional, `notify_trades: true`): a phone notification for every entry and exit.
+- **Watchdog:** the always-on results website alerts if the bot hasn't started by 9:31 ET on a trading day
+  (it knows the market holidays), or stops responding during the session. The bot writes
+  `logs/heartbeat.json` while it runs for this.
+- **Pause new trades** button on the dashboard (next to Rescan): no new entries for the rest of the day, an
+  open trade still managed; **Resume** to undo. Kept across a restart the same day.
+- **New version notice:** the bot checks GitHub each morning and the dashboard says when a newer swingbot is
+  out (`update_check: false` turns it off).
+- **Results website:** a status line (bot running / finished / not started / stopped, last report and
+  whether it was emailed, file names OneDrive can't sync, version) and the **activity log** for any day,
+  with keys and passwords hidden.
+- **Every command now checks its switches.** A switch the command doesn't use stops it with a message saying
+  which command it belongs to (`site --live`: "--live is for run"). `run` only warns and carries on, so a
+  scheduled start never fails over a stray switch.
+- Dashboard: the Resume state of the button is shown in red.
+
 ## v1.21.1 - 2026-11-05
 
 - **`fetch` says when a switch does nothing.** It only gets the last week of bars for your config's

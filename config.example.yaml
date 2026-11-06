@@ -91,6 +91,16 @@ email_to:                   # e.g. you@example.com (several: separate with comma
 smtp_host: smtp.gmail.com
 smtp_port: 587
 
+# Alerts: a push to your phone and/or an email when something goes wrong - an order the bot couldn't
+# confirm, a refused entry, the day report not sent, and (from the results website, if it's running) the bot
+# not started by 9:31 ET or stopped responding. Test with: py -m swingbot.notify
+# Phone: install the free "ntfy" app, subscribe to a topic, and put the same name here. Anyone who knows the
+# name can read it, so make it long and random (e.g. swingbot-7f3k9q2x8m). A login token goes in .env: NTFY_TOKEN
+ntfy_topic:
+alert_email: false         # true = alerts by email too (to email_to)
+notify_trades: false       # true = also a phone push for each entry and exit
+update_check: true         # the dashboard says when a newer swingbot is out
+
 # Results website: py -m swingbot site  (always on with: py -m swingbot site --install)
 # Every trading day's results, the trades, the day reports and backtest zips - separate from the dashboard.
 # https needs site_cert: one PEM file holding the certificate and its private key (e.g. a wildcard

@@ -356,6 +356,23 @@ def _logging(workdir: Path) -> None:
     )
 
 
+def _check_updates(cfg, bot, workdir: Path) -> None:
+    """In the background: note a newer release for the dashboard and the log. Never holds anything up."""
+    if not cfg.update_check:
+        return
+    import threading
+
+    def go():
+        from .updates import check
+        up = check(cfg, workdir)
+        if up:
+            bot.update = up
+            logging.getLogger("swingbot").info(
+                "swingbot %s is out (you have %s) - after the close: git pull, then start the bot again. %s",
+                up["tag"], up["current"], up.get("url", ""))
+    threading.Thread(target=go, name="update-check", daemon=True).start()
+
+
 def _start_dashboard(cfg, bot):
     """Start the local live page (127.0.0.1 only). Any problem here never stops trading."""
     if not cfg.dashboard:
@@ -369,6 +386,7 @@ def _start_dashboard(cfg, bot):
             dash.on_rescan = bot.request_rescan
             dash.on_setting = bot.request_setting       # trail distance, breakeven, profit target - for today
             dash.on_close = bot.request_close           # "Close now": sells a trade that's ahead, on request
+            dash.on_pause = bot.request_pause           # "Pause new trades" / "Resume"
         url = dash.start()
         if not url:
             logging.getLogger("swingbot").warning("Dashboard: no free port near %d - running without it.",
@@ -392,7 +410,21 @@ def _start_dashboard(cfg, bot):
 
 
 # the switches each command reads (the rest would be silently ignored, so they're refused instead)
-USES = {"fetch": {"config", "data", "bars"}}
+USES = {
+    "fetch": {"config", "data", "bars"},
+    "download": {"config", "bars", "days", "universe", "symbol"},
+    "demo": {"config", "bars", "out", "symbol", "tries", "steps"},
+    "backtest": {"config", "data", "out", "bars", "symbol", "days", "universe", "max_symbols", "tries", "steps"},
+    "scan": {"config", "bars", "symbol"},
+    "run": {"config", "live", "bars", "symbol", "yes"},
+    "site": {"config", "install", "uninstall", "stop"},
+}
+HINT = {   # where a switch belongs, for the message
+    "data": "fetch / backtest", "out": "backtest", "live": "run", "yes": "run", "days": "backtest / download",
+    "universe": "backtest / download", "max_symbols": "backtest", "tries": "backtest", "steps": "backtest",
+    "install": "site", "uninstall": "site", "stop": "site", "symbol": "run / scan / backtest / download",
+    "bars": "run / scan / backtest / download / fetch",
+}
 
 
 def _refuse_unused(ap, args, argv: list[str]) -> None:
@@ -419,7 +451,13 @@ def _refuse_unused(ap, args, argv: list[str]) -> None:
         sys.exit(f"fetch doesn't use {which}: it only gets the last week of bars for the watchlist in your config.\n"
                  f"For indexes, chosen stocks or more history, use download:\n"
                  f"  py -m swingbot download --days {args.days or 180} {what}")
-    sys.exit(f"{args.command} doesn't use {which}.")
+    where = "; ".join(f"{opt} is for {HINT[ap._option_string_actions[opt].dest]}" for opt in dict.fromkeys(given)
+                      if ap._option_string_actions[opt].dest in HINT)
+    msg = f"{args.command} doesn't use {which}" + (f" ({where})" if where else "")
+    if args.command == "run":                  # never stop a scheduled start over a stray switch: warn and go on
+        print(f"Note: {msg} - ignoring it.", file=sys.stderr)
+        return
+    sys.exit(msg + ". Nothing was done.\npy -m swingbot --help lists what each switch is for.")
 
 
 def main(argv=None) -> None:
@@ -563,6 +601,11 @@ def main(argv=None) -> None:
                 sys.exit("Cancelled.")
         bot = BotClass(client, cfg, live=args.live, workdir=workdir)
         bot.forced_symbol = args.symbol.upper() if args.symbol else None
+        from . import notify
+        if notify.install(cfg, "swingbot" if args.live else "swingbot (paper run)"):
+            logging.getLogger("swingbot").info("Alerts on: %s", " and ".join(
+                x for x, on in (("phone (ntfy)", bool(cfg.ntfy_topic)), ("email", cfg.alert_email)) if on))
+        _check_updates(cfg, bot, workdir)
         dash = _start_dashboard(cfg, bot)
         try:
             try:
@@ -574,6 +617,7 @@ def main(argv=None) -> None:
                 logging.getLogger("swingbot").exception("The bot stopped on an error: %s", e)
                 raise
         finally:
+            bot.beat(force=True)                 # the results website then knows the bot has stopped
             if cfg.results_spreadsheet:
                 from .history import record_session
                 record_session(bot, cfg, workdir / "logs")

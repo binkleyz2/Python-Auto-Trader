@@ -162,7 +162,8 @@ def collect(workdir: Path, cfg) -> dict:
                      for p in zips[:200]]
 
     default = account_label(cfg)
-    return dict(version=__version__, generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
+    log_days = sorted((p.name[:10] for p in logs.glob("*.log") if LOG_NAME.match(p.name)), reverse=True)[:60]
+    return dict(version=__version__, log_days=log_days, generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
                 account=default if default in acct else (sorted(acct)[0] if acct else default),
                 accounts=acct, trades=trades[-2000:], trade_count=len(trades), breakdowns=breakdowns,
                 downloads=downloads, backtests=backtests,
@@ -195,6 +196,186 @@ def _sources(workdir: Path, cfg) -> tuple:
         except OSError:
             pass
     return tuple(sorted(sig)) + (date.today().isoformat(),)
+
+
+# ------------------------------------------------------------------------------------------- health
+def _easter(y: int) -> date:
+    a, b, c = y % 19, y // 100, y % 100
+    d, e = b // 4, b % 4
+    g = (8 * b + 13) // 25
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l_ = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 19 * l_) // 433
+    month = (h + l_ - 7 * m + 90) // 25
+    return date(y, month, (h + l_ - 7 * m + 33 * month + 19) % 32)
+
+
+def _nth(y, month, weekday, n):            # n-th weekday of a month (n = -1: the last)
+    if n > 0:
+        d = date(y, month, 1)
+        d += timedelta(days=(weekday - d.weekday()) % 7 + 7 * (n - 1))
+    else:
+        d = date(y, month + 1, 1) - timedelta(days=1) if month < 12 else date(y, 12, 31)
+        d -= timedelta(days=(d.weekday() - weekday) % 7)
+    return d
+
+
+def _observed(d: date) -> date:
+    return d - timedelta(days=1) if d.weekday() == 5 else d + timedelta(days=1) if d.weekday() == 6 else d
+
+
+def market_holidays(y: int) -> set[date]:
+    """NYSE full-day holidays (the regular rules; one-off closures aren't known)."""
+    out = {date(y, 1, 1) if date(y, 1, 1).weekday() < 5 else _observed(date(y, 1, 1)), _nth(y, 1, 0, 3), _nth(y, 2, 0, 3), _easter(y) - timedelta(days=2),
+           _nth(y, 5, 0, -1), _observed(date(y, 7, 4)), _nth(y, 9, 0, 1), _nth(y, 11, 3, 4),
+           _observed(date(y, 12, 25))}
+    if y >= 2022:
+        out.add(_observed(date(y, 6, 19)))
+    return {d for d in out if d.year == y}
+
+
+def market_day(d: date) -> bool:
+    return d.weekday() < 5 and d not in market_holidays(d.year)
+
+
+def _et_now() -> datetime:
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York"))
+
+
+def bot_status(workdir: Path, now: datetime | None = None) -> dict:
+    """What the bot is doing, from logs/heartbeat.json (the bot writes it every 30 s or so while it runs)."""
+    now = now or _et_now()
+    today = now.date()
+    try:
+        hb = json.loads((workdir / "logs" / "heartbeat.json").read_text(encoding="utf-8"))
+        at = datetime.fromisoformat(hb["time"])
+    except (OSError, ValueError, KeyError):
+        hb, at = None, None
+    out = dict(market_day=market_day(today), heartbeat=hb)
+    t = now.time()
+    if hb is None or hb.get("date") != str(today):
+        if not out["market_day"]:
+            out.update(state="no session", text="No trading today")
+        elif t < datetime.strptime("09:31", "%H:%M").time():
+            out.update(state="waiting", text="Not started yet today (it should start before 9:30 ET)")
+        elif t < datetime.strptime("16:00", "%H:%M").time():
+            out.update(state="not started", text="The bot hasn't started today", problem=True)
+        else:
+            out.update(state="no session", text="The bot didn't run today")
+        return out
+    age = (now - at).total_seconds() / 60
+    if hb.get("final"):
+        out.update(state="finished", text=f"Finished for the day ({hb.get('state') or 'session done'})")
+    elif age > 15:
+        out.update(state="stopped", text=f"No sign of the bot since {at:%H:%M} ET ({age:.0f} min) - "
+                                         f"it may have stopped", problem=True)
+    else:
+        out.update(state="running", text=(hb.get("state") or "Running") + (" · paused" if hb.get("paused") else ""))
+    out["since"] = at.strftime("%H:%M")
+    return out
+
+
+BAD_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
+
+
+def onedrive_problems(workdir: Path, limit: int = 8) -> list[str]:
+    """Files whose names Windows/OneDrive can't handle (reserved device names, bad characters, a name ending
+    in a dot or space). OneDrive's own sync status isn't something the bot can read."""
+    from .data import WINDOWS_RESERVED
+    bad = []
+    for root, dirs, files in os.walk(workdir):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".pytest_cache", "node_modules")]
+        for name in dirs + files:
+            stem = name.split(".", 1)[0].upper()
+            if stem in WINDOWS_RESERVED or BAD_CHARS.search(name) or name.endswith((".", " ")):
+                bad.append(str(Path(root, name).relative_to(workdir)))
+                if len(bad) >= limit:
+                    return bad
+    return bad
+
+
+def health(workdir: Path, cfg) -> dict:
+    from . import __version__
+    from .updates import latest_release, newer
+    logs = workdir / "logs"
+    st = bot_status(workdir)
+    reports = sorted(logs.glob("*-report.html"))
+    last = None
+    if reports:
+        day = reports[-1].name[:10]
+        sent = logs / f"{day}-report.sent"
+        last = dict(date=day, href="files/" + reports[-1].name,
+                    sent=sent.read_text(encoding="utf-8").strip() if sent.exists() else "")
+    rel = latest_release(cfg.update_repo, logs / "update-check.json") if getattr(cfg, "update_check", True) else None
+    running = (st.get("heartbeat") or {}).get("version") or __version__
+    return dict(bot=st, report=last, onedrive=onedrive_problems(workdir),
+                version=dict(installed=__version__, bot=running, latest=(rel or {}).get("tag", ""),
+                             url=(rel or {}).get("url", ""),
+                             update=bool(rel and rel.get("tag") and newer(rel["tag"], __version__))),
+                email_report=bool(getattr(cfg, "email_report", False)))
+
+
+class Watchdog:
+    """Runs inside the results website: alerts when the bot hasn't started or has stopped responding."""
+
+    def __init__(self, cfg, workdir: Path):
+        from .notify import Notifier
+        self.n = Notifier(cfg, "swingbot watchdog")
+        self.workdir = workdir
+        self.sent: set[str] = set()
+
+    def check(self, now: datetime | None = None) -> str | None:
+        now = now or _et_now()
+        st = bot_status(self.workdir, now)
+        if st.get("state") == "not started":
+            key = f"{now.date()}-not-started"
+            msg = ("The bot hasn't started today (no sign of it by " + now.strftime("%H:%M") + " ET). "
+                   "Check the PC and the scheduled task that starts it.")
+        elif st.get("state") == "stopped" and now.time() < datetime.strptime("15:58", "%H:%M").time():
+            key = f"{now.date()}-stopped-{st.get('since')}"
+            msg = (f"The bot has stopped responding: no sign of it since {st.get('since')} ET. "
+                   "If it was in a trade, the broker's stop order is still there - check the account.")
+        else:
+            return None
+        if key in self.sent:
+            return None
+        self.sent.add(key)
+        log.warning("Watchdog: %s", msg)
+        if self.n.any_on:
+            self.n.alert("bot not running" if "started" in msg else "bot stopped", msg, key=key)
+        return msg
+
+    def loop(self, stop: threading.Event) -> None:
+        while not stop.wait(120):
+            try:
+                self.check()
+            except Exception as e:
+                log.debug("watchdog check failed: %s", e)
+
+
+# ------------------------------------------------------------------------------------------- the log
+REDACT = [re.compile(r"(?i)(key=)[^\s&\"']+"), re.compile(r"(?i)(token[=:]\s*)[^\s&\"']+"),
+          re.compile(r"(?i)(password[=:]\s*)\S+")]
+LOG_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}\.log$")
+
+
+def log_text(workdir: Path, day: str, lines: int = 500) -> str:
+    """The end of a day's activity log, with keys and tokens hidden."""
+    p = workdir / "logs" / f"{day}.log"
+    if not LOG_NAME.match(p.name) or not p.is_file():
+        return ""
+    with p.open("rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - 400_000))
+        text = f.read().decode("utf-8", errors="replace")
+    out = text.splitlines()[-lines:]
+    joined = "\n".join(out)
+    for r in REDACT:
+        joined = r.sub(lambda m: m.group(1) + "…", joined)
+    return joined
 
 
 # ------------------------------------------------------------------------------------------- the server
@@ -265,6 +446,9 @@ class Site:
         with self._lock:
             self._data = (sig, body)
         return body
+
+    def health_json(self) -> bytes:
+        return json.dumps(health(self.workdir, self.cfg), separators=(",", ":"), default=str).encode()
 
     # ---------------------------------------------------------------- certificate
     def _cert_stat(self):
@@ -387,6 +571,13 @@ class Site:
                         return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8", extra)
                     if path == "/data.json":
                         return self._send(200, site.data_json(), "application/json", extra)
+                    if path == "/health.json":
+                        return self._send(200, site.health_json(), "application/json", extra)
+                    if path == "/log.txt":
+                        day = (parse_qs(url.query).get("date") or [str(_et_now().date())])[0]
+                        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                            return self._text(400, "bad date")
+                        return self._send(200, log_text(site.workdir, day).encode(), "text/plain; charset=utf-8", extra)
                     if path.startswith("/files/"):
                         return self._file(path[len("/files/"):], extra)
                     if path.startswith("/backtests/"):
@@ -504,6 +695,8 @@ def serve(cfg, workdir: Path) -> None:
         log.error("Results site not started: %s", e)
         raise
     site, wait = None, 30
+    stop = threading.Event()
+    threading.Thread(target=Watchdog(cfg, workdir).loop, args=(stop,), name="watchdog", daemon=True).start()
     try:
         while True:
             try:
@@ -533,6 +726,7 @@ def serve(cfg, workdir: Path) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        stop.set()
         if site is not None:
             site.stop()
         try:

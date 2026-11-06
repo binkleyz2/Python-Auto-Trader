@@ -377,7 +377,7 @@ def end_of_day(bot, cfg, logs: Path) -> Path | None:
         return rep["path"]
     except Exception as e:
         log.warning("Couldn't %s the day report (%s). The trades are in the log and trades.csv.",
-                    "send" if cfg.email_report else "make", e)
+                    "send" if cfg.email_report else "make", e, extra={"notify": "alert"})
         return None
 
 

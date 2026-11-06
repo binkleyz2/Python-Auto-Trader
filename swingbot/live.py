@@ -121,6 +121,9 @@ class Bot:
         self.watch_info: dict[str, dict] = {}          # latest price / nearest line per watched symbol
         self.pending_rescan = False                    # "Rescan" pressed on the dashboard
         self.pending_close = False                     # "Close now" pressed on the dashboard (trade ahead only)
+        self.paused = False                            # "Pause new trades" on the dashboard: manage, don't enter
+        self.update = None                             # a newer swingbot release, if the morning check found one
+        self._beat_at = 0.0
         self.midday_done = False                       # today's automatic midday rescan has run (or was dropped)
         self.midday_waiting = False                    # midday rescan is due but waits for the open trade to close
         self.cfg0 = dataclasses.replace(cfg)           # config.yaml as loaded (today's changes are compared to it)
@@ -444,6 +447,17 @@ class Bot:
             return None
         return (price - p["entry"]) * p["shares"] * self.point_value * p.get("side", 1)
 
+    def request_pause(self, paused: bool) -> str:
+        """Dashboard "Pause new trades" / "Resume": no new entries while paused; an open trade is still
+        managed (stop, breakeven, target, end of day). Lasts until resumed or the end of the day."""
+        if self.final:
+            raise ValueError("the session is over")
+        self.paused = bool(paused)
+        log.info("Dashboard: %s", "PAUSED - no new trades until resumed (an open trade is still managed)"
+                 if self.paused else "RESUMED - looking for new trades again")
+        self.save_state()
+        return "Paused: no new trades" if self.paused else "Resumed: looking for trades"
+
     def request_close(self) -> str:
         """Dashboard "Close now" button (dashboard thread): only queues it, and only for a trade that's ahead.
         The main loop checks again at a fresh price before it sells."""
@@ -672,7 +686,7 @@ class Bot:
                       settled_start=self.settled_start, spent_today=self.spent_today,
                       trades_today=self.trades_today, halted=self.halted, paper_pnl=self.paper_pnl,
                       closed=self.closed, pos=p, my_order_ids=sorted(map(str, self.my_order_ids)),
-                      overrides=self.overrides, midday_done=self.midday_done,
+                      overrides=self.overrides, midday_done=self.midday_done, paused=self.paused,
                       last_bar_seen=self.last_bar_seen.isoformat() if self.last_bar_seen is not None else None,
                       extra=self._extra_state())
             path = self._state_path()
@@ -742,6 +756,9 @@ class Bot:
         self.paper_pnl = float(st.get("paper_pnl") or 0)
         self.closed = list(st.get("closed") or [])
         self.midday_done = bool(st.get("midday_done"))
+        self.paused = bool(st.get("paused"))
+        if self.paused:
+            log.info("Still PAUSED from earlier today - no new trades until you press Resume on the dashboard")
         for key, v in (st.get("overrides") or {}).items():       # today's dashboard changes still apply
             if key in self.ADJUSTABLE:
                 self._apply_setting(key, float(v), announce=False)
@@ -1148,7 +1165,7 @@ class Bot:
                          kind, now_px, stop_d)
                 return
         log.info("ENTER %s %s x%d ~%.2f stop %s target %s", kind, self.symbol, shares, entry_ref, stop_d,
-                 tgt_d if tgt_d is not None else "none (trailing stop)")
+                 tgt_d if tgt_d is not None else "none (trailing stop)", extra={"notify": "trade"})
         ex = self._x(signal_ts) + 1 if signal_ts is not None else self._x(now_et())
         pos = dict(kind=kind, side=side, entry=entry_ref, init_stop=float(stop_d), stop=float(stop_d),
                    target=float(tgt_d) if tgt_d is not None else None, shares=shares, signal_ts=signal_ts,
@@ -1173,7 +1190,7 @@ class Bot:
         except Exception as e:
             # A refused order changes nothing. But a timeout can hide an order that did go through,
             # so look at the account before giving up: shares that arrived are adopted and protected.
-            log.warning("Entry order failed: %s", e)
+            log.warning("Entry order failed: %s", e, extra={"notify": "alert"})
             fill_price = None
         self.pos = None
         got = max(0, (self.held_quantity() - base_qty) * side)
@@ -1247,7 +1264,7 @@ class Bot:
                                                       else ROUND_UP))
         self.my_order_ids.add(oid)
         log.warning("No stop found for %d %s - placed standalone stop at %.2f (order %s)",
-                    qty, self.symbol, self.pos["stop"], oid)
+                    qty, self.symbol, self.pos["stop"], oid, extra={"notify": "alert"})
 
     def _stop_price(self, x: float) -> Decimal:
         """A stop price rounded to what the market accepts, on the safe side (down for a long, up for a short)."""
@@ -1335,7 +1352,7 @@ class Bot:
                 oid, price = self._market_sell(qty)
             except Exception as e:                         # e.g. shares still held by a pending cancel
                 last = e
-                log.warning("%s %d %s refused (%s) - retrying in 5 s", self._exit_verb(), qty, self.symbol, e)
+                log.warning("%s %d %s refused (%s) - retrying in 5 s", self._exit_verb(), qty, self.symbol, e, extra={"notify": "alert"})
                 _time.sleep(5)
                 continue
             self.my_order_ids.add(oid)
@@ -1409,7 +1426,7 @@ class Bot:
         pnl = (price - p["entry"]) * p["shares"] * self.point_value * side
         if not self.live:
             self.paper_pnl += pnl
-        log.info("%sEXIT %s @ %.2f (%s) P&L %.2f", "" if self.live else "[paper] ", self.symbol, price, reason, pnl)
+        log.info("%sEXIT %s @ %.2f (%s) P&L %.2f", "" if self.live else "[paper] ", self.symbol, price, reason, pnl, extra={"notify": "trade"})
         self._record(reason, pnl, exit_price=price)
         exit_x = self._x(self.last_bar_seen) if (self.last_bar_seen is not None and reason not in
                                                  ("end of day", "kill switch", "closed by you")) else min(390 / self.bm - 1, self._x(now_et()))
@@ -1544,7 +1561,7 @@ class Bot:
         if self.day_pnl() <= -loss_limit and not self.halted:
             log.warning("Daily loss limit reached (%.2f). No more entries today.", self.day_pnl())
             self.halted = True
-        if (self.halted or self.trades_today >= cfg.max_trades_per_day
+        if (self.halted or self.paused or self.trades_today >= cfg.max_trades_per_day
                 or not (_t(cfg.first_entry_time) <= bt <= _t(cfg.last_entry_time))):
             return
         before = self.symbol
@@ -1692,6 +1709,7 @@ class Bot:
             settings=self._settings_rows(), settings_pending=sorted(self.pending_settings),
             stale=self._stale_status(), watch=self._watch_rows(), can_rescan=not self.pos and not self.final, rescan_pending=self.pending_rescan,
             can_close=bool(p) and not self.final and unreal > 0, close_pending=self.pending_close,
+            paused=self.paused, update=self.update,
             views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
             **self.view,
         )
@@ -1723,10 +1741,30 @@ class Bot:
                              in_trade=bool(self.pos) and sym == self.symbol))
         return rows
 
+    def beat(self, force: bool = False) -> None:
+        """logs/heartbeat.json: the results website reads it to tell whether the bot is running."""
+        now = _time.time()
+        if not force and now - self._beat_at < 30:
+            return
+        self._beat_at = now
+        try:
+            from . import __version__
+            hb = dict(time=now_et().isoformat(timespec="seconds"), date=str(now_et().date()), pid=os.getpid(),
+                      version=__version__, live=self.live, broker=self.broker_name, state=self.state,
+                      final=bool(self.final), symbol=self.symbol, in_trade=bool(self.pos), paused=self.paused,
+                      bar_minutes=self.bm, update=self.update)
+            path = self.workdir / "logs" / "heartbeat.json"
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(hb), encoding="utf-8")
+            os.replace(tmp, path)
+        except Exception as e:
+            log.debug("heartbeat not written: %s", e)
+
     def publish(self, state: str | None = None) -> None:
         if state:
             self.state = state
         self.save_state()
+        self.beat(force=bool(self.final))
         if self.dashboard is None:
             return
         try:
@@ -1742,6 +1780,8 @@ class Bot:
             return "Loss limit hit - watching only"
         if self.trades_today >= self.cfg.max_trades_per_day:
             return "Trade limit reached - watching only"
+        if self.paused:
+            return "Paused - no new trades (press Resume)"
         if len(self.watch) > 1:
             return f"Watching {len(self.watch)} symbols for a setup"
         return f"Watching {self.symbol} for a setup"
@@ -1869,6 +1909,7 @@ class Bot:
                 if remaining <= 0 or stop_file.exists() or self.pending_bm or self.pending_rescan or self.pending_close:
                     break
                 _time.sleep(min(2.0 if self.dashboard is not None else 15.0, max(1.0, remaining)))
+                self.beat()
                 if self.dashboard is not None and not (self.pending_bm or self.pending_rescan) \
                         and (now_et() - last_quote).total_seconds() >= 14:
                     last_quote = now_et()

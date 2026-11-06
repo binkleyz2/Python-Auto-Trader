@@ -94,6 +94,15 @@
   ul.files li a { overflow-wrap: anywhere; min-width: 0; }
   ul.files li span { color: var(--muted); margin-left: auto; white-space: nowrap; }
   footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .status { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: -4px 0 14px; font-size: 13px; color: var(--ink-2); }
+  .status span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .status i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .status i.ok { background: var(--good); } .status i.bad { background: var(--bad); } .status i.info { background: var(--line); }
+  .status b { font-weight: 600; color: var(--ink); }
+  .status .bad-text { color: var(--bad-text); }
+  pre.log { margin: 0; max-height: 520px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace;
+            white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+  pre.log .e { color: var(--bad-text); } pre.log .w { color: #b07800; } pre.log .t { color: var(--ink); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -105,6 +114,8 @@
     <span class="spacer"></span>
     <span class="updated" id="updated">Loading…</span>
   </header>
+
+  <div class="status" id="status" aria-live="polite"></div>
 
   <div class="tiles" id="tiles"></div>
 
@@ -162,6 +173,16 @@
     <div class="card"><div class="head"><h2>Downloads</h2></div><ul class="files" id="downloads"></ul></div>
     <div class="card"><div class="head"><h2>Backtest results</h2><span class="note" id="bt-note"></span></div>
       <ul class="files scroll" id="backtests"></ul></div>
+  </div>
+  <div class="card">
+    <div class="head">
+      <h2>Activity log</h2>
+      <select id="logday" aria-label="Day"></select>
+      <span class="note">newest at the bottom · keys hidden</span>
+      <span class="spacer"></span>
+      <span class="more" style="margin:0"><button type="button" id="logreload">Refresh</button></span>
+    </div>
+    <pre class="log" id="log">…</pre>
   </div>
   <footer id="foot"></footer>
 </main>
@@ -426,8 +447,54 @@ $("q").oninput = () => { SHOWN = 100; trades(); };
 $("more").querySelector("button").onclick = () => { SHOWN += 200; trades(); };
 let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => D && charts(), 120); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => D && charts());
-load();
+// ------------------------------------------------------------------ health and the activity log
+async function health() {
+  let h;
+  try { const r = await fetch("health.json", {cache: "no-store"}); if (!r.ok) return; h = await r.json(); }
+  catch (e) { return; }
+  const item = (cls, label, text, bad) => el("span", {}, el("i", {className: cls}), el("b", {textContent: label}),
+                                              el("span", {className: bad ? "bad-text" : "", textContent: text}));
+  const b = h.bot || {}, hb = b.heartbeat || {};
+  const botCls = {running: "ok", finished: "ok", waiting: "info", "no session": "", stopped: "bad", "not started": "bad"}[b.state] || "";
+  const bits = [item(botCls, "Bot", (b.text || "") + (b.since && b.state === "running" ? ` · ${b.since} ET` : "") +
+                     (hb.live === false ? " · paper run" : ""), b.problem)];
+  if (h.report) bits.push(item(h.report.sent || !h.email_report ? "ok" : "bad", "Last report",
+    `${h.report.date}` + (h.email_report ? (h.report.sent ? ` · emailed ${h.report.sent}` : " · not emailed") : ""),
+    h.email_report && !h.report.sent));
+  bits.push(item(h.onedrive.length ? "bad" : "ok", "OneDrive",
+    h.onedrive.length ? `${h.onedrive.length} file name(s) it can't sync: ${h.onedrive.join(", ")}` : "no file names it can't sync",
+    h.onedrive.length > 0));
+  const v = h.version || {};
+  bits.push(item(v.update ? "info" : "ok", "Version", v.update ? `v${v.installed} - ${v.latest} is out (git pull after the close)`
+                 : `v${v.installed}` + (v.latest ? " · up to date" : "")));
+  $("status").replaceChildren(...bits);
+}
+
+let LOGDAY = "";
+async function loadLog() {
+  const sel = $("logday");
+  const days = (D && D.log_days) || [];
+  if (sel.options.length !== days.length) sel.replaceChildren(...days.map(d => el("option", {value: d, textContent: d})));
+  if (!LOGDAY || !days.includes(LOGDAY)) LOGDAY = days[0] || "";
+  sel.value = LOGDAY;
+  if (!LOGDAY) { $("log").textContent = "No logs yet."; return; }
+  const pre = $("log"), atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+  try {
+    const r = await fetch("log.txt?date=" + LOGDAY, {cache: "no-store"});
+    const text = r.ok ? await r.text() : "Couldn't load the log.";
+    pre.replaceChildren(...text.split("\n").map(line => el("div", {
+      className: / (ERROR|CRITICAL) /.test(line) ? "e" : / WARNING /.test(line) ? "w" : / (ENTER|EXIT|CLOSE BY HAND) /.test(line) ? "t" : "",
+      textContent: line})));
+    if (atEnd) pre.scrollTop = pre.scrollHeight;
+  } catch (e) { pre.textContent = "Couldn't load the log."; }
+}
+$("logday").onchange = e => { LOGDAY = e.target.value; $("log").scrollTop = 1e9; loadLog(); };
+$("logreload").onclick = () => { health(); loadLog(); };
+
+load().then(() => { loadLog(); $("log").scrollTop = 1e9; });
+health();
 setInterval(load, 15 * 60 * 1000);          // an open page picks up a new day by itself
+setInterval(() => { health(); if (LOGDAY === ((D && D.log_days) || [])[0]) loadLog(); }, 60 * 1000);
 </script>
 </body>
 </html>

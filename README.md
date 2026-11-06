@@ -94,7 +94,13 @@ Backtest runs are zipped into `backtests/Results/`, daily logs go to `logs/`, an
 
 It is reachable from this PC only.
 
-**Close a winning trade by hand:** while a trade is ahead, the Open P&L tile has a **Close now** button. After you confirm, the bot sells (or buys back a short) at the market and records it as "closed by you". It checks a fresh price first and only closes if the trade is still ahead; if it has slipped back, the trade stays open with its stop. A market order can fill a little worse than the last price, so a trade that is only just ahead can still close a few cents behind. The button is greyed out while the trade is behind, and only shows in a browser on the PC running the bot (with `dashboard_lan_control: true`, also for network viewers with the key). After closing, the bot carries on looking for new trades as usual. Apart from this button, the page's controls never place orders; the profit target setting can move the open trade's target order.
+**Close a winning trade by hand:** while a trade is ahead, the Open P&L tile has a **Close now** button. After you confirm, the bot sells (or buys back a short) at the market and records it as "closed by you". It checks a fresh price first and only closes if the trade is still ahead; if it has slipped back, the trade stays open with its stop. A market order can fill a little worse than the last price, so a trade that is only just ahead can still close a few cents behind. The button is greyed out while the trade is behind, and only shows in a browser on the PC running the bot (with `dashboard_lan_control: true`, also for network viewers with the key). After closing, the bot carries on looking for new trades as usual.
+
+**Pause new trades:** the button next to Rescan stops the bot opening new trades for the rest of the day; a trade already open is still managed as usual (stop, breakeven, target, end of day). Press **Resume** to start looking again. A pause survives a restart the same day and is gone the next morning.
+
+**New version:** each morning the bot checks GitHub, and if a newer swingbot is out the dashboard says so ("v1.23.0 is out - after the close: git pull, then start the bot again"). Turn off with `update_check: false`.
+
+Apart from Close now and Pause, the page's controls never place orders; the profit target setting can move the open trade's target order.
 
 **Earlier days on the chart:** the **Show** dropdown at the top right of the chart switches between Today, 2 days and 5 days. The bot always uses the same history (about a week) to find swing points and trend lines; this only changes how much of it you see, so a line that started on an earlier day is drawn in full. Your choice is remembered in that browser.
 
@@ -270,6 +276,26 @@ Start the bot any time before 9:35 ET on trading days; 9:00 is a good choice. It
 
 On Windows, use Task Scheduler. Only add `--live --yes` once you trust the dry runs. The computer must stay awake and online all session.
 
+## Alerts
+
+The bot can tell you when something goes wrong, so you don't have to be watching:
+- anything it logs as an error: an order it couldn't confirm, a stop it couldn't move, an exit that failed
+- an entry order refused, a stop it had to place on its own, the day report not made or not sent
+- from the results website (when it's running): the bot **hasn't started by 9:31 ET** on a trading day,
+  or has **stopped responding** during the session (market holidays are known)
+
+and, if you want, a push for **every entry and exit**.
+
+```yaml
+ntfy_topic: swingbot-7f3k9q2x8m   # phone: the free ntfy app, subscribed to this topic (long and random: anyone with the name can read it)
+alert_email: true                 # also by email, to email_to (uses the SMTP login in .env)
+notify_trades: true               # a phone push for each entry and exit too
+```
+
+Test it with `py -m swingbot.notify`. The same alert isn't repeated within 15 minutes, there are at most 30 a
+day, and sending happens in the background, so it never holds up trading. Your own ntfy server: `ntfy_server`,
+with a token in `.env` as `NTFY_TOKEN`.
+
 ## Results website (always on)
 
 A second website, separate from the daily dashboard, shows every trading day's results as they build up:
@@ -278,6 +304,9 @@ A second website, separate from the daily dashboard, shows every trading day's r
 - every day, week and month, with links to that day's report and dashboard picture
 - every trade, what's working (by setup, by exit, by entry hour) and the best and worst stocks
 - downloads (results spreadsheet, `daily-results.csv`, `trades.csv`) and your backtest zips
+- a status line: whether the bot is running (or finished, or hasn't started), the last day report and whether
+  it was emailed, any file names OneDrive can't sync (like `CON.csv`), and whether a newer version is out
+- the activity log for today or any earlier day, as on the PC (keys and passwords hidden)
 
 It reads the files the bot already writes each time a page is opened, so a new day appears after each
 session with nothing else to run; an open page refreshes itself every 15 minutes. It never connects to a

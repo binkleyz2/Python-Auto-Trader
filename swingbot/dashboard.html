@@ -93,6 +93,7 @@
   .tf button { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface);
                border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
   .tf button:disabled { color: var(--muted); cursor: default; }
+  .tf button[aria-pressed="true"] { border-color: var(--stop); color: var(--bad-text); font-weight: 600; }
   .sgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 18px; }
   @media (max-width: 1000px) { .sgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 560px) { .sgrid { grid-template-columns: 1fr; } }
@@ -142,6 +143,7 @@
       <span class="tf"><i class="key candle"></i><span id="barlabel">5-min bars</span>
         <select id="tf" hidden aria-label="Bar size the bot trades on"></select>
         <button id="rescan" hidden type="button" title="Rank the watchlist again using today's prices (only when not in a trade)">Rescan</button>
+        <button id="pause" hidden type="button" title="Stop opening new trades today; an open trade is still managed">Pause new trades</button>
         <span class="note" id="tfnote"></span></span>
       <span><i class="key" style="border-color:var(--support)"></i>Support (rising)</span>
       <span><i class="key" style="border-color:var(--resist)"></i>Resistance (falling)</span>
@@ -498,12 +500,18 @@ function renderBarPicker(s) {
   const can = CTRL && !s.final;
   $("barlabel").textContent = can ? "Bars:" : bm + "-min bars";
   sel.hidden = !can;
-  if (!can) { $("tfnote").textContent = ""; return; }
+  if (!can) { $("tfnote").textContent = ""; $("pause").hidden = true; return; }
   if (sel.options.length !== sizes.length) {
     sel.replaceChildren(...sizes.map(m => { const o = document.createElement("option"); o.value = m; o.textContent = m + " min"; return o; }));
   }
   if (!tfBusy && document.activeElement !== sel) sel.value = String(s.pending_bars || bm);
   if (!tfBusy) $("tfnote").textContent = s.pending_bars ? `switching to ${s.pending_bars} min…` : (s.rescan_pending ? "rescanning…" : "");
+  const pb = $("pause");
+  pb.hidden = false;
+  pb.disabled = pauseBusy;
+  pb.textContent = s.paused ? "Resume" : "Pause new trades";
+  pb.setAttribute("aria-pressed", s.paused ? "true" : "false");
+  pb.title = s.paused ? "Start looking for new trades again" : "Stop opening new trades today; an open trade is still managed";
   const rb = $("rescan");
   rb.hidden = false;
   rb.disabled = !s.can_rescan || s.rescan_pending;
@@ -525,6 +533,17 @@ $("rescan").addEventListener("click", async () => {
   try { $("tfnote").textContent = (await control("rescan", {}))[1]; }
   catch (e) { $("tfnote").textContent = "couldn't reach the bot"; }
   finally { tfBusy = false; }
+});
+
+let pauseBusy = false;
+$("pause").addEventListener("click", async () => {
+  const want = !(S && S.paused);
+  if (want && !confirm("Pause new trades for the rest of today?\n\nAn open trade is still managed as usual " +
+                       "(stop, breakeven, target, end of day). Press Resume to start looking for trades again.")) return;
+  pauseBusy = true; $("pause").disabled = true; $("tfnote").textContent = "sending…";
+  try { $("tfnote").textContent = (await control("pause", {paused: want}))[1]; }
+  catch (e) { $("tfnote").textContent = "couldn't reach the bot"; }
+  finally { pauseBusy = false; }
 });
 
 // "Close now": only on the PC running the bot, only while the trade is ahead; the bot checks again before selling
@@ -707,10 +726,15 @@ function renderBanner(s) {
     ? `${s.leftover.symbol}: a short of ${s.leftover.shares} shares from ${s.leftover.date} is still open (the bot didn't buy them back that day). The bot won't touch it - close it in your broker's app.`
     : `${s.leftover.symbol}: ${s.leftover.shares} shares from ${s.leftover.date} are still open (the bot didn't sell them that day). The bot won't touch them - close them in your broker's app.`;
   else if (s.final) { msg = "Session finished."; info = true; }
+  else if (s.paused) msg = "Paused: no new trades today until you press Resume. An open trade is still managed.";
   else if (s.stale) {
     msg = `No new ${s.stale.symbol} bar since ${s.stale.since} ET (${s.stale.minutes} min): ${s.stale.feed} has had no trades in it, ` +
           `so the price and chart here are out of date` +
           (s.stale.in_trade ? ". The broker's stop is still active; check the real price in your broker's app." : ".");
+  }
+  if (!msg && s.update && s.update.tag && !SNAP) {
+    msg = `swingbot ${s.update.tag} is out (you have v${s.update.current}). After the close: git pull, then start the bot again.`;
+    info = true;
   }
   b.textContent = msg; b.className = "banner" + (msg ? " show" : "") + (info ? " info" : "");
 }

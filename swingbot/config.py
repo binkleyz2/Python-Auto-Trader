@@ -90,6 +90,14 @@ class Config:
     smtp_host: str = "smtp.gmail.com"     # mail server (Gmail by default; login in .env: SMTP_USER, SMTP_PASSWORD)
     smtp_port: int = 587                  # 587 = STARTTLS, 465 = SSL
 
+    # --- Alerts (py -m swingbot.notify sends a test)
+    ntfy_topic: str = ""                  # phone push via the free ntfy app: a long random topic name (blank = off)
+    ntfy_server: str = "https://ntfy.sh"  # your own ntfy server, if you run one
+    alert_email: bool = False             # alerts by email too (to email_to, with the SMTP login in .env)
+    notify_trades: bool = False           # also a phone push for every entry and exit
+    update_check: bool = True             # check GitHub each morning for a newer swingbot
+    update_repo: str = "binkleyz2/Python-Auto-Trader"
+
     # --- Results website (py -m swingbot site): every day's results, always on, separate from the dashboard
     site_port: int = 4334
     site_cert: str = ""                   # PEM file with the certificate AND its private key -> https
