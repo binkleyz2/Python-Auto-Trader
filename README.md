@@ -49,6 +49,171 @@ Risk per trade, the daily loss limit, the trade limit and the largest-position l
 
 Try shorts in a dry run and on Alpaca's paper account first.
 
+## How the strategy works, step by step
+
+This is the whole strategy in plain words, in the order the bot does things each day. Setting names are in
+`code` with their default values; every one can be changed in `config.yaml` (and backtested with `--try`).
+
+### The idea
+
+Prices rarely move in straight lines: they swing up and down. When the lows of those swings keep rising, a
+line drawn through two of them (**rising support**) often holds the next dip: buyers step in at about the
+same slope. When the highs keep falling, a line through two of them (**falling resistance**) caps the
+rallies, until the price finally pushes through it. The bot trades two moments:
+
+- **Bounce:** the price dips to rising support, holds it, and turns up: buy, with the stop just under the line.
+- **Breakout:** the price closes clearly through falling resistance on heavy volume: buy, with the stop under
+  the line it just broke.
+
+Shorts (`direction: short` or `both`) are the same two trades upside down: a bounce down off falling
+resistance, and a breakdown through rising support.
+
+### 1. Before the open: pick the stocks to watch
+
+At start-up (the scheduled task starts it at 8:00 ET) the bot ranks every stock on its watchlist (your
+`watchlist`, plus every stock in `watchlist_indexes` such as the Dow or Nasdaq-100) using **5-minute bars
+up to yesterday's close only**, so it never sees today's prices before trading them.
+
+A stock is dropped if its last price is under `min_price` ($10), its average daily dollar volume is under
+`min_avg_dollar_volume` ($50M), or there isn't enough history. For each remaining stock it looks for the
+current trend lines (below) and scores how close the price sits to one:
+
+- **near rising support** (a bounce could come): only if the stock closed **above** its 5-day average close
+  (shorts: below). Score = 1 / (1 + distance to the line in ATRs), for a distance of 0 to 2 ATR.
+- **near falling resistance** (a breakout could come): a distance of 0 to 1.5 ATR. Same score, +0.1 if
+  the stock is above its 5-day average, -0.2 if not.
+- either way, +0.15 for each extra time the price has touched the line since it was drawn (up to 3): a
+  line that has held more often counts for more.
+
+The `watch_count` (5) best-scoring stocks are watched today. The log and dashboard show the list with each
+stock's setup ("0.47 ATR above rising support, 4 extra touches").
+
+### 2. Swing points
+
+Every 5-minute bar (regular hours only; `bar_minutes`) is checked:
+
+- a **swing low** is a bar whose low is below the lows of the `swing_n` (5) bars before it and no higher
+  than the 5 bars after it; a **swing high** is the same with highs.
+- it only counts once those 5 later bars have closed (25 minutes on 5-minute bars). Until then nobody could
+  know it was a swing, so the bot doesn't use it either. This is what keeps the backtest honest.
+
+**ATR** (average true range, `atr_period` = 14 bars) measures how far the stock normally moves in one bar. All
+distances below are in ATRs, so the same rules fit a $10 stock and a $500 one, a quiet day and a wild one.
+
+### 3. Trend lines
+
+At each bar the bot draws at most one support line and one resistance line:
+
+- **Support:** through the **newest** confirmed swing low and an older swing low that is **lower** (so the
+  line rises), at least `min_anchor_gap_bars` (6) bars apart and no more than `max_line_age_bars` (400 bars,
+  about 5 days) old. No close since the first point may be below the line by more than
+  `break_tolerance_atr` (0.1 ATR); a broken line isn't a line any more. If the nearest older low doesn't
+  qualify, the bot walks back through older ones until one does.
+- **Resistance:** the mirror image: the newest swing high and an older, **higher** one (so the line falls),
+  with no close above it before the current bar (the current bar is allowed to break it; that's the signal).
+- **Touches:** bars after the second point that came within `touch_tolerance_atr` (0.25 ATR) of the line.
+  They don't change the trades, only the morning score.
+
+Because the line always uses the newest swing, it updates through the day as new swings form.
+
+### 4. Entry signals (checked when each bar closes, from 9:45 to 15:30)
+
+**Bounce** (`enable_bounce`), all of these on one bar:
+1. the bar's low came within 0.25 ATR of the rising support line (or below it),
+2. it closed **above** the line,
+3. it closed **higher than it opened** (a green bar: buyers won that bar),
+4. the line's second point is more than `swing_n` (5) bars back, so the bounce isn't the swing that made the line.
+
+**Breakout** (`enable_breakout`), all of these on one bar:
+1. it closed more than 0.1 ATR **above** the falling resistance line,
+2. the bar before closed at or below it (a fresh break, not a stock that's been above it for a while),
+3. its volume is at least `breakout_volume_mult` (1.2) times the average of the 20 bars before it,
+4. it closed higher than it opened.
+
+The watched stocks are checked best-ranked first, longs before shorts, and the **first signal is taken**.
+The bot holds **one position at a time**; while it's in a trade it doesn't look for another.
+
+### 5. The stop and the size of the trade
+
+The **initial stop** is the lower of:
+- `stop_buffer_atr` (0.25 ATR) below the line at that bar, and
+- `min_stop_atr` (0.5 ATR) below the entry bar's close,
+
+and it is always at least `min_stop_pct` (0.25%) below the price, so it can't sit inside the bid-ask spread.
+If that puts the stop more than `max_stop_atr` (3 ATR) away, the trade is skipped: too much risk for one bar's
+setup. **1R** is the distance from the entry to this stop, the amount the trade risks per share.
+
+**Size:** the number of shares that loses `risk_per_trade_pct` (0.5%) of the account if the stop is hit,
+cut down if needed so the position is no more than `max_position_pct` (25%) of the account and fits in the
+cash and settled-cash limits (and, for shorts, short buying power). With $100,000 and a stop $2 away, that's
+$500 / $2 = 250 shares.
+
+**The order:** live, right after the signal bar closes, a market order goes in **with the stop attached**
+(a bracket order on Alpaca, and on Public for longs; an OSO order on NinjaTrader; a Public short gets its stop
+order right after the fill), so the stop is at the broker from the start and protects the trade even if the
+bot or the PC stops. If the price has already reached the stop
+by then, the trade is skipped. The backtest fills at the next bar's open plus `slippage_pct` (0.02%).
+
+### 6. Managing the trade (after every bar)
+
+- **Profit target** (`use_target`, off by default): a limit order at `reward_risk` (2) times the risk
+  beyond the entry. On Alpaca, with the target off, the bracket's take-profit is parked far away (+50%) so the
+  stop and target stay linked.
+- **Breakeven** (`breakeven_at_r`, 1R): once a bar **closes** that far in profit, the stop moves to the entry
+  price. From then on the worst case is about a scratch.
+- **Trailing stop** (`trail_stop`, on): the newest confirmed swing low since the entry signal moves the stop
+  to `trail_buffer_atr` (if blank, the 0.25 ATR stop buffer) under that low. It only moves up (shorts: down
+  over swing highs), only by `trail_min_step_atr` (0.1 ATR) or more at a time, and never closer than 0.25%
+  to the price.
+- Every stop move reprices the stop order at the broker in one step, so there's never a moment without a stop.
+  If the broker refuses a change, the old stop stays and the bot tries again next bar.
+
+### 7. How a trade ends
+
+Whichever comes first:
+- the **stop** fills at the broker (the initial stop, the breakeven stop, or a trailed stop),
+- the **target** fills (if `use_target` is on),
+- **15:50 ET** (`flatten_time`): the bot sells everything (buys back shorts) at the market, so it never holds
+  overnight,
+- you press **Close now** on the dashboard (only while the trade is ahead), or use the kill switch.
+
+### 8. The rest of the day
+
+After a trade closes the bot looks for the next signal on its watched stocks, until one of these stops it:
+- `max_trades_per_day` (2) trades taken,
+- the day is down `daily_loss_limit_pct` (1.5%) of the starting account,
+- it's past `last_entry_time` (15:30),
+- you pressed **Pause new trades**.
+
+At `midday_rescan_time` (12:45) it ranks the watchlist again, this time including the morning's bars, and
+watches the new best stocks. If it's in a trade then, it rescans when the trade closes (if that's before
+`midday_rescan_by`, 15:00).
+
+After 15:50: the day report and email, the results spreadsheet, the dashboard snapshot, the settings record and
+the evening live-vs-backtest check.
+
+### A real example
+
+The bot's short in PLTR on November 4, 2026 (settings: `direction: both`, `swing_n: 4`, `min_stop_atr: 1.5`,
+`reward_risk: 2.5`, `breakeven_at_r: 1.5`):
+
+| Time (ET) | What happened |
+|---|---|
+| 8:00 | Morning scan: PLTR was 7th of the 10 stocks watched that day. |
+| 10:15 bar | PLTR bounced down off falling resistance: the bar's high came up to the line at 176.26 and it closed below the line, lower than it opened. **Short bounce signal.** |
+| 10:20 | Stop: the higher of 0.25 ATR above the line (about 176.78) and 1.5 ATR above the 176.09 close (179.19), rounded up to **179.20**. Size: 0.5% of the $98,312 account is $492 of risk, which at $3.11 a share would be 158 shares, but the 25% position limit ($24,578) allows only **139**. Target: 2.5R below the expected 176.09 entry = **168.33**. Bracket order sent; filled at **175.87**, so 1R = $3.33 x 139 = $462.52. |
+| 11:25 | A bar closed at 170.65, more than 1.5R in profit: **breakeven**. The stop moved down to the entry, 175.88. The trade could no longer lose more than a few cents. |
+| 15:50 | Neither the stop nor the target had filled: **end of day**. Bought back at 170.50, **+$746.68** (+1.6R). |
+
+### What the backtest found
+
+Testing the settings on 6 months of 5-minute bars for about 1,800 liquid stocks (with the checks in "Does it
+hold up?" above) found that the **minimum stop distance matters most**: stops closer than about 1.5 ATR were
+shaken out by ordinary noise far too often. Most other settings made less difference than luck did: which
+stocks happened to be picked, and which weeks were tested. The edge found was small (about +0.1R a trade), so
+run it on a paper account and compare with the backtest (the evening check does this) before risking real
+money. Past results don't guarantee anything.
+
 ## Setup
 
 ```bash
