@@ -94,6 +94,7 @@
   th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
   td { padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
   td.num, th.num { text-align: right; }
+  tr.open td { font-style: italic; background: var(--hover, rgba(127,127,127,0.06)); }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
   .grid2 > * { min-width: 0; }
@@ -313,7 +314,9 @@ function renderTop(s) {
   setText("t-day", signed(s.day_pnl), tone(s.day_pnl));
   setText("t-day-s", s.mode === "LIVE" ? "realized + open" : "paper: realized + open");
   setText("t-trades", `${s.trades_used ?? 0} of ${s.max_trades ?? "–"}`);
+  const nOpen = s.pos ? 1 : 0, nDone = (s.trades || []).length;
   let ts = s.halted ? "daily loss limit hit – no new entries" : (s.spendable != null ? `settled cash left ${money(s.spendable)}` : "");
+  if (nOpen) ts = `${nDone} closed, 1 open` + (ts ? " · " + ts : "");
   setText("t-trades-s", ts);
   document.title = `${s.symbol || "swingbot"}${p ? " " + signed(p.unreal) : ""} · ${s.mode === "LIVE" ? "LIVE" : "dry run"}`;
 }
@@ -699,6 +702,7 @@ function table(container, cols, rows, empty) {
   const tb = document.createElement("tbody");
   rows.forEach(r => {
     const row = document.createElement("tr");
+    if (r.open) row.className = "open";
     cols.forEach(c => {
       const td = document.createElement("td"); if (c.num) td.className = "num";
       const v = c.f(r); td.textContent = v;
@@ -711,12 +715,18 @@ function table(container, cols, rows, empty) {
   const wrap = document.createElement("div"); wrap.style.overflowX = "auto"; wrap.appendChild(t);
   container.appendChild(wrap);
 }
+function openRow(s) {             // the trade still open, first, with its P&L so far at the last price
+  const p = s.pos;
+  if (!p) return [];
+  return [{open: true, symbol: s.symbol, entry_time: p.entry_time, exit_time: "open", kind: p.kind, shares: p.shares,
+           entry: p.entry, exit: s.last, reason: "still open", pnl: p.unreal}];
+}
 function renderTables(s) {
   table($("trades"), [
     {h: "Symbol", f: r => r.symbol || s.symbol}, {h: "In", f: r => r.entry_time}, {h: "Out", f: r => r.exit_time}, {h: "Type", f: r => r.kind},
     {h: "Shares", num: 1, f: r => r.shares}, {h: "Entry", num: 1, f: r => fmt(r.entry)}, {h: "Exit", num: 1, f: r => fmt(r.exit)},
     {h: "Exit by", f: r => r.reason}, {h: "P&L", num: 1, f: r => signed(r.pnl), tone: r => r.pnl},
-  ], s.trades || [], "No completed trades yet.");
+  ], openRow(s).concat(s.trades || []), "No trades yet today.");
   renderWatch(s);
   renderSettings(s);
   table($("scan"), [

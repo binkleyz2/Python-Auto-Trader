@@ -4,6 +4,12 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.27.1 - 2026-11-06
+
+- **Dashboard: the open trade is in "Trades today".** The list showed only finished trades; the trade still
+  open is now the first row (in italics): when it went in, the last price as its "exit", "still open", and its
+  P&L so far. The Trades today tile adds "2 closed, 1 open".
+
 ## v1.27.0 - 2026-11-06
 
 - **One stock per company on the watch list.** When two share classes of the same company both rank in the top
