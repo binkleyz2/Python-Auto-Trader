@@ -1307,13 +1307,14 @@ class Bot:
 
     # ------------------------------------------------- move the stop by hand
     def stop_range(self, price: float | None = None) -> tuple[float, float] | None:
-        """Where a stop you set may go: from the initial stop (never more risk than planned) to
-        min_stop_pct from the price (so it can't fill at once). (low, high) in price; None if no room."""
+        """Where a stop you set may go: from the initial stop (never more risk than planned) to one tick
+        (a cent for stocks) from the price - your call, so the bot's 0.25% buffer (min_stop_pct, for its own
+        moves) doesn't apply. (low, high) in price; None if there's no room."""
         p = self.pos
         price = self.last_price if price is None else price
         if not p or price is None or price != price:
             return None
-        gap = abs(price) * self.cfg.min_stop_pct / 100
+        gap = float(getattr(self, "tick", None) or 0.01)
         if p.get("side", 1) > 0:
             lo, hi = float(self._stop_price(p["init_stop"])), float(self._stop_price(price - gap))
         else:
@@ -1323,13 +1324,13 @@ class Bot:
     def _check_stop(self, x: float, price: float | None = None) -> float:
         rng = self.stop_range(price)
         if rng is None:
-            raise ValueError("no room to move it: the price is too close to the initial stop")
+            raise ValueError("no room to move it: the price is at the initial stop")
         lo, hi = rng
         x = float(self._stop_price(x))
         if not lo <= x <= hi:
             far, near = (lo, hi) if self.pos.get("side", 1) > 0 else (hi, lo)
             raise ValueError(f"the stop has to be between {far:.2f} (the initial stop) and {near:.2f} "
-                             f"({self.cfg.min_stop_pct:g}% from the price)")
+                             f"(just {'under' if self.pos.get('side', 1) > 0 else 'over'} the price)")
         if x == self.pos["stop"]:
             raise ValueError(f"the stop is already at {x:.2f}")
         return x

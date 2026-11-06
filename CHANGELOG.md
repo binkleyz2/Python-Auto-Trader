@@ -4,6 +4,15 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.26.0 - 2026-11-06
+
+- **A stop you set yourself can go right up to the price:** one cent under it for a long (over it for a
+  short), instead of 0.25% away. On a slow $127 stock the 0.25% buffer was 32 cents, which left no room to move
+  the stop up until the trade was well ahead. The bot's own stop moves (initial stop, breakeven, trailing) still
+  keep the `min_stop_pct` buffer. The price is checked again just before the order is changed; if it has
+  already dropped through your level, the stop isn't moved and the message says why. A stop that close can be
+  hit by an ordinary tick, so it's for locking in a gain on purpose.
+
 ## v1.25.2 - 2026-11-06
 
 - **Dashboard: where the stop can go is always on screen.** The Stop tile shows "Can move: 126.56 – 126.98",

@@ -290,9 +290,9 @@ function renderTop(s) {
       const near = side > 0 ? hi : lo, far = side > 0 ? lo : hi;
       const room = (near - p.stop) * side;             // how far it can still move toward the price
       rg.textContent = `Can move: ${fmt(Math.min(lo, hi))} – ${fmt(Math.max(lo, hi))}` +
-        (room <= 0 ? ` (no room ${side > 0 ? "up" : "down"} yet: within ${s.min_stop_pct}% of the price)` : "");
+        (room <= 0 ? ` (no room ${side > 0 ? "up" : "down"}: it's right at the price)` : "");
     } else {
-      rg.textContent = `Can't move it now: the price is within ${s.min_stop_pct}% of the initial stop`;
+      rg.textContent = "Can't move it now: the price is at the initial stop";
     }
   } else {
     setText("t-pos", "Flat");

@@ -183,8 +183,9 @@ def test_move_the_stop_by_hand(tmp_path, monkeypatch):
     t.price = 50.40
     bot.refresh_quote()
     lo, hi = bot.status()["stop_range"]
-    assert lo == 49.0 and hi == pytest.approx(50.27, abs=0.01)          # initial stop .. 0.25% under the price
-    for bad, why in ((48.5, "between 49.00"), (50.35, "between 49.00"), ("abc", "enter a price"), (49.0, "already at")):
+    assert lo == 49.0 and hi == pytest.approx(50.39)                    # initial stop .. a cent under the price
+    for bad, why in ((48.5, "between 49.00"), (50.40, "just under the price"), ("abc", "enter a price"),
+                     (49.0, "already at")):
         with pytest.raises(ValueError, match=why):
             bot.request_stop(bad)
     assert "Moving the stop to 50.10" in bot.request_stop(50.10)        # above the entry: locks in a little
@@ -196,7 +197,7 @@ def test_move_the_stop_by_hand(tmp_path, monkeypatch):
     bot.move_stop_by_hand()
     assert bot.pos["stop"] == 49.40
     bot.request_stop(50.20)
-    price["p"] = t.price = 50.15                                        # fell before the bot got to it: now too close
+    price["p"] = t.price = 50.15                                        # fell under it before the bot got to it
     bot.move_stop_by_hand()
     assert bot.pos["stop"] == 49.40 and bot.pending_stop is None
     assert bot.status()["stop_manual"]
@@ -213,7 +214,7 @@ def test_manual_stop_turns_off_automatic_moves(tmp_path):
     bot.last_price = 19.0
     bot.refresh_quote = lambda: None
     lo, hi = bot.stop_range()
-    assert lo == pytest.approx(19.05) and hi == 21.0                    # short: 0.25% above the price .. initial stop
+    assert lo == pytest.approx(19.01) and hi == 21.0                    # short: a cent above the price .. initial stop
     bot.request_stop(20.5)
     bot.move_stop_by_hand()
     assert bot.pos["stop"] == 20.5 and bot.pos["manual_stop"]
