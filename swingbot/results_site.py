@@ -111,6 +111,8 @@ def collect(workdir: Path, cfg) -> dict:
                                          if d.start_value else 0.0,
                                          bot_pnl=d.bot_pnl, trades=d.trades, wins=d.wins, losses=d.losses,
                                          note=d.note, files=files))
+    from . import settings_log
+    srecs = settings_log.read(logs)
     acct = {}
     for name, days in accounts.items():
         tr = sum(d["trades"] for d in days)
@@ -123,6 +125,7 @@ def collect(workdir: Path, cfg) -> dict:
             weeks=_group(days, lambda d: str(date.fromisoformat(d["date"]) -
                                              timedelta(days=date.fromisoformat(d["date"]).weekday()))),
             months=_group(days, lambda d: d["date"][:7]),
+            periods=settings_log.periods(srecs, days, name),
             summary=dict(first=days[0]["date"], last=days[-1]["date"], trading_days=len(days),
                          start=days[0]["start"], latest=days[-1]["end"],
                          change=round(days[-1]["end"] - days[0]["start"], 2),
@@ -161,9 +164,22 @@ def collect(workdir: Path, cfg) -> dict:
                           when=datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M"))
                      for p in zips[:200]]
 
+    checks = []
+    for f in sorted(logs.glob("????-??-??-check.json")):        # (not update-check.json)
+        try:
+            c = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        checks.append({k: c.get(k) for k in ("date", "live_trades", "bt_trades", "matched", "live_pnl", "bt_pnl", "gap",
+                                              "slippage_dollars", "slippage_pct_per_side", "slippage_setting")}
+                      | dict(live_only=len(c.get("live_only") or []), bt_only=len(c.get("bt_only") or [])))
+    pcts = [c["slippage_pct_per_side"] for c in checks if c.get("slippage_pct_per_side") is not None]
+    check_summary = dict(days=len(checks), avg_pct_per_side=round(sum(pcts) / len(pcts), 4) if pcts else None,
+                         setting=getattr(cfg, "slippage_pct", None),
+                         gap=round(sum(c.get("gap") or 0 for c in checks), 2))
     default = account_label(cfg)
     log_days = sorted((p.name[:10] for p in logs.glob("*.log") if LOG_NAME.match(p.name)), reverse=True)[:60]
-    return dict(version=__version__, log_days=log_days, generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
+    return dict(version=__version__, log_days=log_days, checks=checks[::-1], check_summary=check_summary, generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
                 account=default if default in acct else (sorted(acct)[0] if acct else default),
                 accounts=acct, trades=trades[-2000:], trade_count=len(trades), breakdowns=breakdowns,
                 downloads=downloads, backtests=backtests,
@@ -182,7 +198,8 @@ def _sources(workdir: Path, cfg) -> tuple:
     """A signature of the files the page is built from: the data is rebuilt only when one changes."""
     logs = workdir / "logs"
     sig = []
-    for p in [logs / "daily-results.csv", workdir / "trades.csv", *logs.glob("*-report.html"),
+    for p in [logs / "daily-results.csv", workdir / "trades.csv", logs / "settings-history.jsonl",
+              *logs.glob("????-??-??-check.json"), *logs.glob("*-report.html"),
               *logs.glob("*-dashboard.jpg")]:
         try:
             st = p.stat()

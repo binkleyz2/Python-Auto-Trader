@@ -122,6 +122,7 @@ class Bot:
         self.pending_rescan = False                    # "Rescan" pressed on the dashboard
         self.pending_close = False                     # "Close now" pressed on the dashboard (trade ahead only)
         self.paused = False                            # "Pause new trades" on the dashboard: manage, don't enter
+        self.watched_today: list[str] = []             # every stock watched today (morning, rescans), for the check
         self.update = None                             # a newer swingbot release, if the morning check found one
         self._beat_at = 0.0
         self.midday_done = False                       # today's automatic midday rescan has run (or was dropped)
@@ -180,6 +181,7 @@ class Bot:
             sym = self.forced_symbol
             df = self.fetch_bars(sym, "WEEK")
             self.watch = [sym]
+            self.watched_today = list(dict.fromkeys(self.watched_today + self.watch))
             self.histories = {sym: df[df.index.date < today] if not df.empty else df}
             self._activate(sym)
             self.pick_reason = f"chosen by you ({self.bm}-minute bars)"
@@ -253,6 +255,7 @@ class Bot:
             return False
         today = now_et().date()
         self.watch = [r.symbol for r in good]
+        self.watched_today = list(dict.fromkeys(self.watched_today + self.watch))
         self.histories = {r.symbol: hist[r.symbol][hist[r.symbol].index.date < today] for r in good}
         self.watch_info = {}
         self.views = {}
@@ -687,6 +690,7 @@ class Bot:
                       trades_today=self.trades_today, halted=self.halted, paper_pnl=self.paper_pnl,
                       closed=self.closed, pos=p, my_order_ids=sorted(map(str, self.my_order_ids)),
                       overrides=self.overrides, midday_done=self.midday_done, paused=self.paused,
+                      watched_today=self.watched_today,
                       last_bar_seen=self.last_bar_seen.isoformat() if self.last_bar_seen is not None else None,
                       extra=self._extra_state())
             path = self._state_path()
@@ -757,6 +761,7 @@ class Bot:
         self.closed = list(st.get("closed") or [])
         self.midday_done = bool(st.get("midday_done"))
         self.paused = bool(st.get("paused"))
+        self.watched_today = list(dict.fromkeys(list(st.get("watched_today") or []) + self.watched_today))
         if self.paused:
             log.info("Still PAUSED from earlier today - no new trades until you press Resume on the dashboard")
         for key, v in (st.get("overrides") or {}).items():       # today's dashboard changes still apply

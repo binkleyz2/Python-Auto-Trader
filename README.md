@@ -262,6 +262,16 @@ py -m swingbot backtest --days 120 --try swing_n=4,5 --try breakeven_at_r=1,1.5
 
 Values can be a list (`1,1.5,2`), a range of whole numbers (`swing_n=4-8` = 4, 5, 6, 7, 8), a range with a step (`breakeven_at_r=1-2:0.25` = 1, 1.25, 1.5, 1.75, 2), or a mix (`2,4-6`). Or set the gap with a separate switch: `--try breakeven_at_r=1-2 --step 0.5` tries 1, 1.5 and 2; `--step breakeven_at_r=0.5` sets it for one setting only (whole-number settings like `swing_n` keep steps of 1 unless you give them a whole step, e.g. `--step swing_n=2`). The values each setting will try are printed first. Every combination (here 4, up to 64) runs on the same data and prints one line each: trades, win rate, average R, profit factor, net, return and drawdown. The table and each run's full report and trades go into that run's zip (see below). Any setting in `config.yaml` can be tried this way.
 
+**Does it hold up?** Each combination is also checked four ways: the first and second half of the period, and
+two random halves of the stocks (the same halves for every combination). The **holds up** column says in how
+many of those it made money. Only settings at **4/4** made money every way; a big net without that is usually
+luck: the weeks or stocks it happened to get. The halves triple the run time; `--quick` skips them (then it's
+the two periods only, x/2). With `--symbol` or fewer than 40 stocks there are no stock halves.
+
+**Dates:** `--from 2026-09-01` and `--to 2026-10-15` trade only on those days (earlier days still give the
+trend lines their history). `--from` without `--days` gets enough history by itself. Example:
+`py -m swingbot backtest --universe sp500 --from 2026-09-01 --try min_stop_atr=1-2:0.5`
+
 **Reading the results:** average R (the average trade's result in multiples of its initial risk) is the number to watch. Above 0 means the winners pay for the losers; a few hundred trades are needed before the difference between two settings means much. A setting that only wins in one month, or only with one setup, is more likely luck than an edge. And a backtest is the best case: real fills (CELC filled 28 cents worse than its signal price on 2026-10-27) and spreads cost more than `slippage_pct`.
 
 Other data: `py -m swingbot backtest --data data` still tests on one `SYMBOL.csv` per stock in `data/` (columns `timestamp,open,high,low,close,volume`; timestamps in UTC or with an offset, marking the bar's start), for example built with `fetch` each evening.
@@ -275,6 +285,23 @@ Start the bot any time before 9:35 ET on trading days; 9:00 is a good choice. It
 ```
 
 On Windows, use Task Scheduler. Only add `--live --yes` once you trust the dry runs. The computer must stay awake and online all session.
+
+## Live vs backtest, every evening
+
+After each session the bot backtests the day on the same stocks it watched, with the settings it used and
+the same starting account value, and lines the trades up with what it really did: the same trades in both
+(and how much worse or better the real fills were), trades only the bot made, and trades only the backtest
+made. It goes in the day report, the results website ("Live vs backtest") and `logs/<day>-check.json`. If real
+fills keep coming in worse than `slippage_pct` assumes, raise it so backtests stay honest. By hand, for a day
+in the last week: `py -m swingbot.daycheck 2026-11-06`. It can't copy a midday rescan, a bar-size change
+during the day, a trade you closed with Close now, or partial fills exactly.
+
+## Settings over time
+
+Each trading day's settings are recorded in `logs/settings-history.jsonl` (the trading settings from
+config.yaml, plus anything changed on the dashboard for that day only). The results website groups the days
+into periods with the same settings and shows how each did and what changed, so you can tell a change that
+helped from a good week.
 
 ## Alerts
 

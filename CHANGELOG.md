@@ -4,6 +4,19 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.23.0 - 2026-11-05
+
+- **Live vs backtest, every evening:** after the session the bot backtests the day on the stocks it watched,
+  with the settings it used, and compares: the same trades in both and how much worse or better the real fills
+  were, and trades only the bot or only the backtest made. In the day report, the results website and
+  `logs/<day>-check.json`; by hand: `py -m swingbot.daycheck [date]`.
+- **Settings over time:** each trading day's settings go into `logs/settings-history.jsonl` (with that day's
+  dashboard changes). The results website shows periods with the same settings, how each did and what changed.
+- **`--try` checks whether a result holds up:** every combination is also run on two random halves of the
+  stocks, and split into the first and second half of the period; the new **holds up** column says in how many
+  of the 4 it made money (4/4 = every way). `--quick` skips the stock halves.
+- **`--from` / `--to` dates** for backtests (`--from` alone fetches enough history).
+
 ## v1.22.0 - 2026-11-05
 
 - **Alerts** by phone push (the free ntfy app) and/or email: anything the bot logs as an error (an order it

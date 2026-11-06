@@ -158,6 +158,17 @@
     </div>
   </div>
 
+  <div class="grid2">
+    <div class="card">
+      <div class="head"><h2>Settings over time</h2><span class="note">periods with the same config.yaml settings</span></div>
+      <div class="tw scroll"><table id="periods"></table></div>
+    </div>
+    <div class="card">
+      <div class="head"><h2>Live vs backtest</h2><span class="note" id="check-note"></span></div>
+      <div class="tw scroll"><table id="checks"></table></div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="head">
       <h2>Trades</h2><span class="note" id="trade-note"></span>
@@ -222,7 +233,7 @@ function render() {
   $("updated").textContent = a ? `Last trading day ${dfmt(a.summary.last)} · page data ${D.generated}` :
     `No results yet · page data ${D.generated}`;
   $("foot").textContent = `swingbot v${D.version}. Rebuilt from the bot's files when they change; reload for the latest. ` + D.note;
-  tiles(a); charts(); table(); breakdowns(); trades(); files();
+  tiles(a); charts(); table(); breakdowns(); trades(); files(); periods(a); checks();
 }
 
 function tiles(a) {
@@ -435,6 +446,33 @@ function files() {
   $("downloads").replaceChildren(...(D.downloads.length ? D.downloads.map(item) : [el("li", {className: "empty", textContent: "Nothing yet."})]));
   $("backtests").replaceChildren(...(D.backtests.length ? D.backtests.map(item) : [el("li", {className: "empty", textContent: "No backtest zips yet."})]));
   $("bt-note").textContent = D.backtests.length ? `${D.backtests.length} newest first` : "";
+}
+
+function periods(a) {
+  const rows = a && a.periods ? [...a.periods].reverse() : [];
+  const what = p => { const box = el("span");
+    box.append(el("span", {textContent: p.changes.join("; ")}));
+    if (p.today_only.length) box.append(el("div", {className: "note", textContent: "Today-only changes: " + p.today_only.join(" · ")}));
+    return box; };
+  tableOf($("periods"), [
+    {h: "From", f: p => p.start}, {h: "To", f: p => p.end}, {h: "Days", n: 1, f: p => p.days},
+    {h: "Bot P&L", n: 1, f: p => usd(p.bot_pnl, true), c: p => cls(p.bot_pnl)},
+    {h: "Per day", n: 1, f: p => usd(p.per_day, true), c: p => cls(p.per_day)},
+    {h: "Trades", n: 1, f: p => p.trades}, {h: "Win %", n: 1, f: p => p.win_pct.toFixed(1)},
+    {h: "What changed", f: what}], rows, "Settings are recorded from v1.23.0 on, one line per trading day.");
+}
+
+function checks() {
+  const rows = D.checks || [], s = D.check_summary || {};
+  $("check-note").textContent = s.avg_pct_per_side == null ? "after each session" :
+    `fills averaged ${s.avg_pct_per_side >= 0 ? "+" : ""}${s.avg_pct_per_side.toFixed(3)}% a side vs the backtest (it assumes ${s.setting}%)`;
+  tableOf($("checks"), [
+    {h: "Date", f: c => c.date}, {h: "Bot", n: 1, f: c => `${c.live_trades} · ${usd(c.live_pnl, true)}`, c: c => cls(c.live_pnl)},
+    {h: "Backtest", n: 1, f: c => `${c.bt_trades} · ${usd(c.bt_pnl, true)}`, c: c => cls(c.bt_pnl)},
+    {h: "Same", n: 1, f: c => c.matched}, {h: "Only bot", n: 1, f: c => c.live_only}, {h: "Only test", n: 1, f: c => c.bt_only},
+    {h: "Fill cost", n: 1, f: c => c.slippage_dollars == null ? "–" : usd(-c.slippage_dollars, true), c: c => cls(-(c.slippage_dollars || 0))},
+    {h: "% a side", n: 1, f: c => c.slippage_pct_per_side == null ? "–" : c.slippage_pct_per_side.toFixed(3)}],
+    rows, "The bot checks itself against a backtest after each session (from v1.23.0).");
 }
 
 // ------------------------------------------------------------------ controls

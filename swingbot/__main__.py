@@ -149,6 +149,29 @@ def try_values(vals: str, step=None) -> list:
     return list(dict.fromkeys(out))
 
 
+def _date_range(args):
+    """--from / --to as dates; --from without --days fetches enough history to cover it."""
+    from datetime import date
+    out = []
+    for name, v in (("--from", getattr(args, "from_date", None)), ("--to", getattr(args, "to_date", None))):
+        if not v:
+            out.append(None)
+            continue
+        try:
+            out.append(date.fromisoformat(v))
+        except ValueError:
+            sys.exit(f"{name} {v}: write the date as YYYY-MM-DD, e.g. 2026-09-01")
+    start, end = out
+    if start and end and end < start:
+        sys.exit(f"--to {end} is before --from {start}")
+    if start and not getattr(args, "days", None) and args.command == "backtest" and not getattr(args, "data_given", False):
+        args.days = (date.today() - start).days + 21            # plus three weeks for the lines' history
+        print(f"--from {start}: using {args.days} days of history (--days {args.days})")
+    if start or end:
+        print(f"Trading days: {start or 'the start'} to {end or 'the end'} of the data")
+    return start, end
+
+
 def _forced(args) -> list[str] | None:
     return [x.strip().upper() for x in args.symbol.split(",") if x.strip()] if getattr(args, "symbol", None) else None
 
@@ -268,7 +291,7 @@ def _excel(write, path: Path) -> bool:
 
 
 def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None,
-             steps: list[str] | None = None) -> list[Path]:
+             steps: list[str] | None = None, start=None, end=None, quick: bool = False) -> list[Path]:
     """Run the backtest for every combination of the --try values and print them side by side.
     Returns the files it wrote."""
     import dataclasses
@@ -308,6 +331,17 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         print(f"{len(combos)} combinations to run", flush=True)
     out.mkdir(exist_ok=True)
     rows, scan_cache, prepared, written, curves, run_trades = [], {}, {}, [], {}, {}
+    # robustness: each combination also on two random halves of the stocks (the same halves for all), so a
+    # result that only came from which stocks happened to be picked shows up as such
+    import random
+    syms = sorted(hist)
+    halves = None
+    if not quick and not forced and len(syms) >= 40:
+        random.Random(7).shuffle(syms)
+        halves = (set(syms[::2]), set(syms[1::2]))
+        half_cache = ({}, {})
+        print(f"Each combination also runs on two random halves of the {len(syms)} stocks, to check it holds up "
+              f"(--quick skips this)", flush=True)
     for n, combo in enumerate(combos, 1):
         c = dataclasses.replace(cfg, **dict(combo))
         try:
@@ -320,8 +354,14 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         if pk not in prepared:
             prepared[pk] = bt.prepare(hist, c)
         trades, curve, _ = bt.run(hist, c, scan_cache=scan_cache, prepared=prepared[pk], progress=_progress("days"),
-                                  forced=forced)
+                                  forced=forced, start=start, end=end)
         s = bt.summarize(trades, curve, c)
+        checks = _periods(trades, curve)
+        if halves is not None:
+            for i, half in enumerate(halves):
+                sub = {k: v for k, v in prepared[pk].items() if k in half}
+                tr_h, _, _ = bt.run(hist, c, scan_cache=half_cache[i], prepared=sub, start=start, end=end)
+                checks.append(round(float(tr_h["pnl"].sum()), 2) if len(tr_h) else 0.0)
         tag = "-".join(f"{k}{v if v != '' else 'off'}" for k, v in combo).replace(" ", "").replace(":", "")
         trades.to_csv(out / f"trades-{tag}.csv", index=False)
         (out / f"report-{tag}.txt").write_text(bt.report_text(trades, curve, c, label) + "\n", encoding="utf-8")
@@ -329,7 +369,10 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         curves[label], run_trades[label] = curve, trades
         rows.append({"settings": label, "trades": s.get("trades", 0), "win %": s.get("win_rate_pct"),
                      "avg R": s.get("avg_r"), "profit factor": s.get("profit_factor"), "net $": s.get("net_pnl"),
-                     "return %": s.get("return_pct"), "max drawdown %": s.get("max_drawdown_pct")})
+                     "return %": s.get("return_pct"), "max drawdown %": s.get("max_drawdown_pct"),
+                     "1st half $": checks[0], "2nd half $": checks[1],
+                     **({"stocks A $": checks[2], "stocks B $": checks[3]} if len(checks) > 2 else {}),
+                     "holds up": f"{sum(x > 0 for x in checks)}/{len(checks)}"})
     import pandas as pd
     table = pd.DataFrame(rows).set_index("settings")
     table.to_csv(out / "compare.csv")
@@ -339,10 +382,25 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
     from .backtest_chart import compare_chart
     chart = _excel(lambda p: compare_chart(p, table, curves, run_trades, cfg), out / "compare-chart.html")
     print("\n" + table.to_string())
+    n = 4 if halves is not None else 2
+    print(f"\nholds up = in how many of the {n} checks it made money: the first and second half of the period"
+          + (", and two random halves of the stocks" if halves is not None else "") + f". Only settings at {n}/{n} "
+          "made money every way; a big net without that is probably luck - the stocks or weeks it happened to get.")
     if not cfg.backtest_results_dir:
         print(f"\nEach run's trades and full report are in {out}/ (compare.csv, report-*.txt, trades-*.csv)")
     return ([out / "compare-chart.html"] if chart else []) + ([out / "compare.xlsx"] if excel else []) + \
         [out / "compare.txt", out / "compare.csv"] + written
+
+
+def _periods(trades, curve) -> list[float]:
+    """Net P&L in the first and second half of the trading days."""
+    days = sorted(curve.index) if len(curve) else []
+    if len(days) < 2 or not len(trades):
+        return [0.0, 0.0]
+    import pandas as pd
+    mid = pd.Timestamp(days[len(days) // 2]).date()
+    d = pd.to_datetime(trades["date"]).dt.date
+    return [round(float(trades.loc[d < mid, "pnl"].sum()), 2), round(float(trades.loc[d >= mid, "pnl"].sum()), 2)]
 
 
 def _logging(workdir: Path) -> None:
@@ -413,8 +471,9 @@ def _start_dashboard(cfg, bot):
 USES = {
     "fetch": {"config", "data", "bars"},
     "download": {"config", "bars", "days", "universe", "symbol"},
-    "demo": {"config", "bars", "out", "symbol", "tries", "steps"},
-    "backtest": {"config", "data", "out", "bars", "symbol", "days", "universe", "max_symbols", "tries", "steps"},
+    "demo": {"config", "bars", "out", "symbol", "tries", "steps", "quick"},
+    "backtest": {"config", "data", "out", "bars", "symbol", "days", "universe", "max_symbols", "tries", "steps",
+                 "from_date", "to_date", "quick"},
     "scan": {"config", "bars", "symbol"},
     "run": {"config", "live", "bars", "symbol", "yes"},
     "site": {"config", "install", "uninstall", "stop"},
@@ -424,6 +483,7 @@ HINT = {   # where a switch belongs, for the message
     "universe": "backtest / download", "max_symbols": "backtest", "tries": "backtest", "steps": "backtest",
     "install": "site", "uninstall": "site", "stop": "site", "symbol": "run / scan / backtest / download",
     "bars": "run / scan / backtest / download / fetch",
+    "from_date": "backtest", "to_date": "backtest", "quick": "backtest --try",
 }
 
 
@@ -486,12 +546,19 @@ def main(argv=None) -> None:
                     help="backtest --try: gap between values in a range, e.g. --try breakeven_at_r=1-2 --step 0.5 "
                          "(1, 1.5, 2); --step breakeven_at_r=0.5 for just that setting. Whole-number settings "
                          "like swing_n keep steps of 1 unless given a whole step")
+    ap.add_argument("--from", dest="from_date", metavar="YYYY-MM-DD",
+                    help="backtest: trade only from this day (earlier days still give the lines their history)")
+    ap.add_argument("--to", dest="to_date", metavar="YYYY-MM-DD", help="backtest: trade only up to this day")
+    ap.add_argument("--quick", action="store_true",
+                    help="backtest --try: skip the checks on two halves of the stocks (about 3x faster)")
     ap.add_argument("--install", action="store_true",
                     help="site: start the results website now and every time you log on to Windows")
     ap.add_argument("--uninstall", action="store_true", help="site: stop it and don't start it at logon any more")
     ap.add_argument("--stop", action="store_true", help="site: stop the copy running in the background")
     args = ap.parse_args(argv)
-    _refuse_unused(ap, args, sys.argv[1:] if argv is None else argv)
+    raw = sys.argv[1:] if argv is None else list(argv)
+    _refuse_unused(ap, args, raw)
+    args.data_given = any(t.split("=", 1)[0] == "--data" for t in raw)
 
     _env()
     _first_config(Path(args.config))
@@ -517,6 +584,7 @@ def main(argv=None) -> None:
 
     if args.command in ("demo", "backtest"):
         from . import backtest as bt
+        start, end = _date_range(args)
         from .data import load_dir, synthetic
         if args.command == "demo":
             print("Using SYNTHETIC random-walk data. Results only show the code works.\n")
@@ -531,12 +599,12 @@ def main(argv=None) -> None:
         if args.steps and not args.tries:
             sys.exit("--step goes with --try, e.g. --try breakeven_at_r=1-2 --step 0.5")
         if args.tries:
-            files = _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps)
+            files = _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps, start, end, args.quick)
             if args.command == "backtest" and (kept := _archive(files, cfg, args, workdir)):
                 print(f"Saved as {kept}")
             return
         print(f"Backtesting {len(hist)} stocks...", flush=True)
-        trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args))
+        trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args), start=start, end=end)
         out = Path(args.out)
         out.mkdir(exist_ok=True)
         trades.to_csv(out / "trades.csv", index=False)
@@ -618,6 +686,9 @@ def main(argv=None) -> None:
                 raise
         finally:
             bot.beat(force=True)                 # the results website then knows the bot has stopped
+            if args.live:
+                from .settings_log import record as record_settings
+                record_settings(bot, cfg, workdir / "logs")
             if cfg.results_spreadsheet:
                 from .history import record_session
                 record_session(bot, cfg, workdir / "logs")
@@ -629,6 +700,9 @@ def main(argv=None) -> None:
                     from .screenshot import save_jpg
                     save_jpg(snap, cfg.dashboard_jpg_browser)
                 dash.stop()
+            if bot.prepared and bot.last_bar_seen is not None and bot.final:
+                from .daycheck import run as evening_check
+                evening_check(bot, cfg, workdir / "logs")      # live vs backtest, before the report so it's in it
             from .report import end_of_day
             end_of_day(bot, cfg, workdir / "logs")
     finally:

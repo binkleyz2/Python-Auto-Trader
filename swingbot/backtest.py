@@ -211,10 +211,11 @@ def prepare(history: dict[str, pd.DataFrame], cfg: Config) -> dict:
 
 def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, warmup_days: int = 3,
         progress=None, scan_cache: dict | None = None, prepared: dict | None = None,
-        forced: list[str] | None = None) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
+        forced: list[str] | None = None, start=None, end=None) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
     """Returns (trades, end-of-day equity curve, daily scan log). ``scan_cache`` lets several runs with
     settings that don't change the scan (stops, targets, trades per day...) share the daily rankings.
-    ``forced`` = watch these symbols every day without a scan or a midday rescan (live: run --symbol)."""
+    ``forced`` = watch these symbols every day without a scan or a midday rescan (live: run --symbol).
+    ``start``/``end`` (dates): trade only on those days; earlier days still give the lines their history."""
     prepared = prepared if prepared is not None else prepare(history, cfg)
     all_days = sorted(set().union(*[set(p[3]) for p in prepared.values()])) if prepared else []
     equity = cfg.starting_equity
@@ -225,6 +226,10 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
     for k, day in enumerate(all_days):
         if k < warmup_days:
             continue
+        if start is not None and day < start:
+            continue
+        if end is not None and day > end:
+            break
         window_start = all_days[max(0, k - lookback_days)]
         ck = (key, day)
         if forced:

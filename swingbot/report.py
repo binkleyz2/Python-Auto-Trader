@@ -283,6 +283,13 @@ def build(logs: Path, cfg, day: str, bars_for=None, extra: dict | None = None) -
     for sym, path in charts.items():
         parts.append(f'<div style="margin:10px 0"><img src="cid:{sym}" alt="{html.escape(sym)} chart" '
                      f'style="max-width:100%;border:1px solid #e1e0d9;border-radius:6px"></div>')
+    chk = logs / f"{day}-check.json"
+    if chk.exists():
+        try:
+            from .daycheck import html_section
+            parts.append(html_section(json.loads(chk.read_text(encoding="utf-8"))))
+        except Exception as e:
+            log.debug("report: check section skipped (%s)", e)
     if extra.get("jpg"):
         parts.append('<p style="color:#52514e">The whole end-of-day dashboard is attached as a picture'
                      + (", and the results spreadsheet too." if extra.get("xlsx") else ".") + "</p>")

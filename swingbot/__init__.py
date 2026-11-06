@@ -1,2 +1,2 @@
 """swingbot: swing-point trend-line day trading."""
-__version__ = "1.22.0"
+__version__ = "1.23.0"

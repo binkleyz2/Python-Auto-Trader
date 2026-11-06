@@ -393,3 +393,41 @@ def test_fetch_refuses_switches_it_would_ignore(tmp_path, monkeypatch, capsys):
         main(["fetch", "--days=90", "--symbol", "NVDA"])
     assert "--days, --symbol" in str(e.value) and "download --days 90 --symbol NVDA" in str(e.value)
     assert not (tmp_path / "config.yaml").exists()          # stopped before doing anything
+
+
+def test_try_checks_whether_results_hold_up(tmp_path, capsys):
+    """Each combination is split by period and, with 40+ stocks, by two random halves of the stocks."""
+    import pandas as pd
+    from swingbot import __main__ as m
+    hist = {f"S{i:02d}": synthetic(f"S{i:02d}", days=12, seed=i) for i in range(40)}
+    cfg = Config(min_avg_dollar_volume=0, direction="both")
+    m._compare(hist, cfg, ["reward_risk=2,3"], tmp_path / "a")
+    t = pd.read_csv(tmp_path / "a" / "compare.csv", index_col=0)
+    assert {"1st half $", "2nd half $", "stocks A $", "stocks B $", "holds up"} <= set(t.columns)
+    assert all(str(v).endswith("/4") for v in t["holds up"])
+    full = t["net $"].iloc[0]
+    assert abs(t["1st half $"].iloc[0] + t["2nd half $"].iloc[0] - full) < 0.05     # the periods add up
+    assert "two random halves of the stocks" in capsys.readouterr().out
+    m._compare(hist, cfg, ["reward_risk=2,3"], tmp_path / "b", quick=True)
+    t = pd.read_csv(tmp_path / "b" / "compare.csv", index_col=0)
+    assert "stocks A $" not in t.columns and all(str(v).endswith("/2") for v in t["holds up"])
+
+
+def test_from_and_to_dates(tmp_path):
+    from swingbot.__main__ import _date_range
+    from types import SimpleNamespace
+    hist = {f"S{i:02d}": synthetic(f"S{i:02d}", days=20, seed=i) for i in range(4)}
+    cfg = Config(min_avg_dollar_volume=0, direction="both")
+    days = sorted(set().union(*[set(d.index.date) for d in hist.values()]))
+    start, end = days[8], days[14]
+    trades, curve, _ = bt.run(hist, cfg, start=start, end=end)
+    assert all(start <= pd.Timestamp(d).date() <= end for d in curve.index)
+    if len(trades):
+        assert all(start <= pd.Timestamp(d).date() <= end for d in trades["date"])
+    a = SimpleNamespace(from_date="2026-09-01", to_date="2026-10-01", days=None, command="backtest", data_given=False)
+    s, e = _date_range(a)
+    assert str(s) == "2026-09-01" and str(e) == "2026-10-01" and a.days > 60
+    with pytest.raises(SystemExit):
+        _date_range(SimpleNamespace(from_date="2026-10-02", to_date="2026-10-01", days=5, command="backtest"))
+    with pytest.raises(SystemExit):
+        _date_range(SimpleNamespace(from_date="9/1/2026", to_date=None, days=5, command="backtest"))
