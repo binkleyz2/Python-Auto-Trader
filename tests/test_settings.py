@@ -171,3 +171,51 @@ def test_close_now_in_a_dry_run_and_on_the_page(tmp_path):
         assert e.value.code == 400 and b"no open trade" in e.value.read()   # reached the bot, which said no
     finally:
         d.stop()
+
+
+def test_move_the_stop_by_hand(tmp_path, monkeypatch):
+    bot, t = _bot(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="no open trade"):
+        bot.request_stop(49.5)
+    bot.enter(50.0, 49.0, "bounce")
+    price = {"p": 50.40}
+    monkeypatch.setattr(bot, "_last_trade_price", lambda: price["p"])
+    t.price = 50.40
+    bot.refresh_quote()
+    lo, hi = bot.status()["stop_range"]
+    assert lo == 49.0 and hi == pytest.approx(50.27, abs=0.01)          # initial stop .. 0.25% under the price
+    for bad, why in ((48.5, "between 49.00"), (50.35, "between 49.00"), ("abc", "enter a price"), (49.0, "already at")):
+        with pytest.raises(ValueError, match=why):
+            bot.request_stop(bad)
+    assert "Moving the stop to 50.10" in bot.request_stop(50.10)        # above the entry: locks in a little
+    bot.move_stop_by_hand()
+    stops = [o for o in t.all.values() if o.status in ("new", "held") and o.type == "stop"]
+    assert bot.pos["stop"] == 50.10 and bot.pos["manual_stop"] and len(stops) == 1
+    assert float(stops[0].stop_price) == 50.10
+    bot.request_stop(49.40)                                             # looser again: allowed, back toward the start
+    bot.move_stop_by_hand()
+    assert bot.pos["stop"] == 49.40
+    bot.request_stop(50.20)
+    price["p"] = t.price = 50.15                                        # fell before the bot got to it: now too close
+    bot.move_stop_by_hand()
+    assert bot.pos["stop"] == 49.40 and bot.pending_stop is None
+    assert bot.status()["stop_manual"]
+    bot.prepared = True
+    bot.save_state()
+    assert bot.load_state()["pos"]["manual_stop"]                       # kept across a restart
+
+
+def test_manual_stop_turns_off_automatic_moves(tmp_path):
+    bot = live.Bot(None, Config(breakeven_at_r=1.0), live=False, workdir=tmp_path)
+    bot.symbol = "AAA"
+    bot.pos = dict(kind="short bounce", side=-1, shares=10, entry=20.0, stop=21.0, init_stop=21.0, target=None,
+                   entry_x=3, entry_clock="10:00", stop_steps=[[3, 21.0]])
+    bot.last_price = 19.0
+    bot.refresh_quote = lambda: None
+    lo, hi = bot.stop_range()
+    assert lo == pytest.approx(19.05) and hi == 21.0                    # short: 0.25% above the price .. initial stop
+    bot.request_stop(20.5)
+    bot.move_stop_by_hand()
+    assert bot.pos["stop"] == 20.5 and bot.pos["manual_stop"]
+    src = open(live.__file__, encoding="utf-8").read()
+    assert "not manual and self.symbol in frames" in src and "cfg.trail_stop and not manual" in src

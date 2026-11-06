@@ -177,6 +177,9 @@ Whichever comes first:
   overnight,
 - you press **Close now** on the dashboard (only while the trade is ahead), or use the kill switch.
 
+You can also move the stop yourself with **Move** on the dashboard's Stop tile (anywhere between the initial stop
+and 0.25% from the price); after that, the bot leaves that trade's stop where you put it.
+
 ### 8. The rest of the day
 
 After a trade closes the bot looks for the next signal on its watched stocks, until one of these stops it:
@@ -261,11 +264,13 @@ It is reachable from this PC only.
 
 **Close a winning trade by hand:** while a trade is ahead, the Open P&L tile has a **Close now** button. After you confirm, the bot sells (or buys back a short) at the market and records it as "closed by you". It checks a fresh price first and only closes if the trade is still ahead; if it has slipped back, the trade stays open with its stop. A market order can fill a little worse than the last price, so a trade that is only just ahead can still close a few cents behind. The button is greyed out while the trade is behind, and only shows in a browser on the PC running the bot (with `dashboard_lan_control: true`, also for network viewers with the key). After closing, the bot carries on looking for new trades as usual.
 
+**Move the stop yourself:** the Stop tile has a **Move** button while a trade is open. Type a price, press Set, and confirm (it shows what the trade would lose or keep if the stop is hit). The bot checks the price again and reprices the stop order at the broker in one step, so a stop is always in place. The stop can go anywhere from the **initial stop** (never more risk than the trade started with) to **0.25% from the price** (`min_stop_pct`, so it can't fill straight away); the button's tooltip shows the range. Tighter or looser within that range are both fine. Once you've set it, the bot **stops moving that trade's stop itself** (no breakeven or trailing moves), so it won't undo your choice; the Stop tile says "set by you". You can move it again as often as you like. Only on the PC running the bot, like Close now.
+
 **Pause new trades:** the button next to Rescan stops the bot opening new trades for the rest of the day; a trade already open is still managed as usual (stop, breakeven, target, end of day). Press **Resume** to start looking again. A pause survives a restart the same day and is gone the next morning.
 
 **New version:** each morning the bot checks GitHub, and if a newer swingbot is out the dashboard says so ("v1.23.0 is out - after the close: git pull, then start the bot again"). Turn off with `update_check: false`.
 
-Apart from Close now and Pause, the page's controls never place orders; the profit target setting can move the open trade's target order.
+Apart from Close now, Move and Pause, the page's controls never place orders; the profit target setting can move the open trade's target order.
 
 **Earlier days on the chart:** the **Show** dropdown at the top right of the chart switches between Today, 2 days and 5 days. The bot always uses the same history (about a week) to find swing points and trend lines; this only changes how much of it you see, so a line that started on an earlier day is drawn in full. Your choice is remembered in that browser.
 

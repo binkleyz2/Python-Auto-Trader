@@ -4,6 +4,15 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.24.0 - 2026-11-06
+
+- **Move the stop yourself:** a **Move** button on the dashboard's Stop tile while a trade is open. Type a
+  price and confirm (it shows what the trade would lose or keep at that stop); the bot checks the price again
+  and reprices the stop order at the broker in one step. Allowed anywhere from the initial stop (no more risk
+  than planned) to `min_stop_pct` (0.25%) from the price. After that the bot doesn't move that trade's stop by
+  itself (no breakeven or trailing), and the tile says "set by you". Only on the PC running the bot. Kept
+  across a restart.
+
 ## v1.23.0 - 2026-11-05
 
 - **Live vs backtest, every evening:** after the session the bot backtests the day on the stocks it watched,

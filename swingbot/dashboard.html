@@ -55,6 +55,14 @@
   .tbtn { margin-left: auto; font: inherit; font-size: 11px; padding: 0 7px; line-height: 18px; border-radius: 5px;
           border: 1px solid var(--good); color: var(--good-text); background: var(--surface); cursor: pointer; }
   .tbtn:disabled { border-color: var(--border); color: var(--muted); cursor: default; }
+  .tbtn.mv { border-color: var(--entry); color: var(--entry); }
+  .tbtn.x { border-color: var(--border); color: var(--ink-2); margin-left: 4px; }
+  .stopform { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .stopform[hidden] { display: none; }
+  .stopform input { width: 6em; min-width: 0; font: inherit; font-size: 13px; padding: 1px 5px; color: var(--ink);
+                    background: var(--surface); border: 1px solid var(--border); border-radius: 5px; }
+  .tile .stopform .s { flex-basis: 100%; white-space: normal; overflow: visible; text-overflow: clip; }
+  .stopform .tbtn { margin-left: 0; }
   .tile .s { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .up { color: var(--good-text); } .down { color: var(--bad-text); }
   .card { padding: 12px 14px; margin-bottom: 14px; }
@@ -133,7 +141,14 @@
     <div class="tile"><div class="k">Open P&amp;L <button id="close" class="tbtn" type="button" hidden
          title="Sell now at the market and keep the profit (only while the trade is ahead)">Close now</button></div>
          <div class="v" id="t-open">–</div><div class="s" id="t-open-s"></div></div>
-    <div class="tile"><div class="k">Stop</div><div class="v" id="t-stop">–</div><div class="s" id="t-stop-s"></div></div>
+    <div class="tile"><div class="k">Stop <button id="mvstop" class="tbtn mv" type="button" hidden
+         title="Set the stop yourself">Move</button></div>
+         <div class="v" id="t-stop">–</div><div class="s" id="t-stop-s"></div>
+         <form id="stopform" class="stopform" hidden autocomplete="off">
+           <input id="stopval" type="number" step="0.01" inputmode="decimal" aria-label="New stop price">
+           <button type="submit" class="tbtn mv">Set</button><button type="button" id="stopcancel" class="tbtn x">Cancel</button>
+           <div class="s" id="stophint"></div>
+         </form></div>
     <div class="tile"><div class="k">Day P&amp;L</div><div class="v" id="t-day">–</div><div class="s" id="t-day-s"></div></div>
     <div class="tile"><div class="k">Trades today</div><div class="v" id="t-trades">–</div><div class="s" id="t-trades-s"></div></div>
   </section>
@@ -248,13 +263,25 @@ function renderTop(s) {
     const locked = (p.stop - p.entry) * p.shares * side;
     let sub = dist == null ? "" : `${fmt(dist)} ${side < 0 ? "above" : "below"} last`;
     if ((p.stop - p.init_stop) * side > 0) sub += locked >= 0 ? ` · locks ${signed(locked)}` : ` · moved ${p.stop_steps.length - 1}×`;
+    if (s.stop_manual) sub += " · set by you";
+    if (s.stop_pending != null) sub += ` · moving to ${fmt(s.stop_pending)}…`;
     setText("t-stop-s", sub);
+    const mv = $("mvstop");
+    mv.hidden = !(CTRL && !s.final);
+    mv.disabled = !s.stop_range || s.stop_pending != null;
+    mv.title = s.stop_range ? `Set the stop yourself: between ${fmt(side > 0 ? s.stop_range[0] : s.stop_range[1])} (the initial stop) and ${fmt(side > 0 ? s.stop_range[1] : s.stop_range[0])}`
+                            : "No room to move it: the price is too close to the initial stop";
+    if (!$("stopform").hidden && s.stop_range) {
+      const [lo, hi] = s.stop_range;
+      $("stophint").textContent = `${fmt(lo)} to ${fmt(hi)}. After you set it, the bot stops moving this trade's stop itself.`;
+    }
   } else {
     setText("t-pos", "Flat");
     setText("t-pos-s", !own ? (s.pos ? `the bot is in a trade in ${s.symbol}` : `no trade in ${chartSym}`)
                             : (s.symbol ? "watching for a setup" : ""));
     setText("t-open", "–"); setText("t-open-s", "");
     $("close").hidden = true;
+    $("mvstop").hidden = true; $("stopform").hidden = true;
     setText("t-stop", "–"); setText("t-stop-s", "");
   }
   if (own) {
@@ -544,6 +571,34 @@ $("pause").addEventListener("click", async () => {
   try { $("tfnote").textContent = (await control("pause", {paused: want}))[1]; }
   catch (e) { $("tfnote").textContent = "couldn't reach the bot"; }
   finally { pauseBusy = false; }
+});
+
+// "Move" on the Stop tile: a stop price you choose (within the initial stop and 0.25% of the price)
+$("mvstop").addEventListener("click", () => {
+  const f = $("stopform");
+  f.hidden = !f.hidden;
+  if (!f.hidden && S && S.pos) {
+    $("stopval").value = (+S.pos.stop).toFixed(2);
+    const [lo, hi] = S.stop_range || [0, 0];
+    $("stophint").textContent = `${fmt(lo)} to ${fmt(hi)}. After you set it, the bot stops moving this trade's stop itself.`;
+    $("stopval").focus(); $("stopval").select();
+  }
+});
+$("stopcancel").addEventListener("click", () => { $("stopform").hidden = true; });
+$("stopform").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const p = S && S.pos, v = parseFloat($("stopval").value);
+  if (!p || !(v > 0)) { $("stophint").textContent = "Enter a price, like 175.50"; return; }
+  const risk = (p.entry - v) * p.shares * (p.side || 1);
+  if (!confirm(`Move the ${S.symbol} stop from ${fmt(p.stop)} to ${fmt(v)}?\n\n` +
+               (risk > 0 ? `If it's hit, the trade loses about ${money(risk)}.` : `If it's hit, the trade keeps about ${money(-risk)}.`) +
+               `\n\nAfter this, the bot won't move this trade's stop by itself (no breakeven or trailing).`)) return;
+  $("stophint").textContent = "sending…";
+  try {
+    const [ok, msg] = await control("stop", {price: v});
+    $("stophint").textContent = msg;
+    if (ok) setTimeout(() => { $("stopform").hidden = true; }, 1500);
+  } catch (e) { $("stophint").textContent = "couldn't reach the bot"; }
 });
 
 // "Close now": only on the PC running the bot, only while the trade is ahead; the bot checks again before selling

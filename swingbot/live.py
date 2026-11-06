@@ -121,6 +121,7 @@ class Bot:
         self.watch_info: dict[str, dict] = {}          # latest price / nearest line per watched symbol
         self.pending_rescan = False                    # "Rescan" pressed on the dashboard
         self.pending_close = False                     # "Close now" pressed on the dashboard (trade ahead only)
+        self.pending_stop = None                       # a stop price you set on the dashboard, to apply
         self.paused = False                            # "Pause new trades" on the dashboard: manage, don't enter
         self.watched_today: list[str] = []             # every stock watched today (morning, rescans), for the check
         self.update = None                             # a newer swingbot release, if the morning check found one
@@ -1275,30 +1276,99 @@ class Bot:
         """A stop price rounded to what the market accepts, on the safe side (down for a long, up for a short)."""
         return self._round_price(x, ROUND_DOWN if self.pos.get("side", 1) > 0 else ROUND_UP)
 
-    def raise_stop(self, new_stop: float, why: str = "TRAIL") -> None:
-        """Tighten the stop (up for a long, down for a short). Live: reprice the existing stop order in one
-        step, so a stop is always in place. If the broker refuses, the old stop stays and we retry next bar."""
+    def raise_stop(self, new_stop: float, why: str = "TRAIL", force: bool = False) -> bool:
+        """Tighten the stop (up for a long, down for a short); ``force`` (a stop you set by hand) may also
+        loosen it. Live: reprice the existing stop order in one step, so a stop is always in place. If the
+        broker refuses, the old stop stays and we retry next bar. True if the stop moved."""
         side = self.pos.get("side", 1)
         new_d = self._stop_price(new_stop)
-        if not better_stop(float(new_d), self.pos["stop"], side):
-            return
+        if float(new_d) == self.pos["stop"] or (not force and not better_stop(float(new_d), self.pos["stop"], side)):
+            return False
         log.info("%s stop %s %.2f -> %s", why, self.symbol, self.pos["stop"], new_d)
         step_x = (self._x(self.last_bar_seen) + 1) if self.last_bar_seen is not None else self._x(now_et())
         if not self.live:
             self.pos["stop"] = float(new_d)
             self.pos["stop_steps"].append([step_x, float(new_d)])
-            return
+            return True
         so = self._my_stop_order()
         if so is None:
             self.pos["stop"] = float(new_d)
             self.ensure_stop()
-            return
+            return True
         try:
             self.my_order_ids.add(self._replace_stop(so, new_d))
             self.pos["stop"] = float(new_d)
             self.pos["stop_steps"].append([step_x, float(new_d)])
+            return True
         except Exception as e:
-            log.error("Could not move the stop (keeping %.2f, will retry next bar): %s", self.pos["stop"], e)
+            log.error("Could not move the stop (keeping %.2f%s): %s", self.pos["stop"],
+                      "" if force else ", will retry next bar", e)
+            return False
+
+    # ------------------------------------------------- move the stop by hand
+    def stop_range(self, price: float | None = None) -> tuple[float, float] | None:
+        """Where a stop you set may go: from the initial stop (never more risk than planned) to
+        min_stop_pct from the price (so it can't fill at once). (low, high) in price; None if no room."""
+        p = self.pos
+        price = self.last_price if price is None else price
+        if not p or price is None or price != price:
+            return None
+        gap = abs(price) * self.cfg.min_stop_pct / 100
+        if p.get("side", 1) > 0:
+            lo, hi = float(self._stop_price(p["init_stop"])), float(self._stop_price(price - gap))
+        else:
+            lo, hi = float(self._stop_price(price + gap)), float(self._stop_price(p["init_stop"]))
+        return (lo, hi) if lo <= hi else None
+
+    def _check_stop(self, x: float, price: float | None = None) -> float:
+        rng = self.stop_range(price)
+        if rng is None:
+            raise ValueError("no room to move it: the price is too close to the initial stop")
+        lo, hi = rng
+        x = float(self._stop_price(x))
+        if not lo <= x <= hi:
+            far, near = (lo, hi) if self.pos.get("side", 1) > 0 else (hi, lo)
+            raise ValueError(f"the stop has to be between {far:.2f} (the initial stop) and {near:.2f} "
+                             f"({self.cfg.min_stop_pct:g}% from the price)")
+        if x == self.pos["stop"]:
+            raise ValueError(f"the stop is already at {x:.2f}")
+        return x
+
+    def request_stop(self, price) -> str:
+        """Dashboard "Move" on the Stop tile (dashboard thread): checked, then queued for the main loop."""
+        if self.final:
+            raise ValueError("the session is over")
+        if not self.pos:
+            raise ValueError("there's no open trade")
+        try:
+            x = float(price)
+        except (TypeError, ValueError):
+            raise ValueError("enter a price, like 175.50")
+        if not x > 0:
+            raise ValueError("enter a price, like 175.50")
+        x = self._check_stop(x)
+        self.pending_stop = x
+        log.info("Dashboard: move the %s stop from %.2f to %.2f requested", self.symbol, self.pos["stop"], x)
+        return f"Moving the stop to {x:.2f}..."
+
+    def move_stop_by_hand(self) -> None:
+        """Main loop: check again at a fresh price, then move the stop order. Automatic moves (breakeven,
+        trailing) then stop for this trade, so they don't undo it."""
+        x, self.pending_stop = self.pending_stop, None
+        if x is None or not self.pos or self.final:
+            return
+        self.refresh_quote()
+        try:
+            x = self._check_stop(x)
+        except ValueError as e:
+            log.warning("Stop not moved: %s (the price is %.2f now)", e, self.last_price or float("nan"))
+            return
+        old = self.pos["stop"]
+        if self.raise_stop(x, why="YOUR", force=True):
+            self.pos["manual_stop"] = True
+            log.info("Stop for %s moved by you: %.2f -> %.2f. Automatic stop moves (breakeven%s) are off for "
+                     "this trade.", self.symbol, old, self.pos["stop"], ", trailing" if self.cfg.trail_stop else "")
+            self.save_state()
 
     def breakeven(self, close: float) -> None:
         """Move the stop to the entry price once the trade is breakeven_at_r ahead (once, not every bar)."""
@@ -1548,7 +1618,8 @@ class Bot:
             self.ensure_stop()
             self.sync_stop_from_broker()
             side = self.pos.get("side", 1)
-            if cfg.trail_stop and self.symbol in frames:
+            manual = bool(self.pos.get("manual_stop"))         # you set the stop: no automatic moves
+            if cfg.trail_stop and not manual and self.symbol in frames:
                 d, lo, hi, md = frames[self.symbol]
                 t = len(d) - 1
                 ts = self.pos.get("signal_ts")
@@ -1556,7 +1627,7 @@ class Bot:
                 new_stop = sided_trailing_stop(d, md, t, cfg, lo, hi, from_bar, self.pos["stop"], side)
                 if better_stop(new_stop, self.pos["stop"], side):
                     self.raise_stop(new_stop)
-            if self.pos and self.symbol in frames:
+            if self.pos and not manual and self.symbol in frames:
                 self.breakeven(float(frames[self.symbol][0]["close"].iat[-1]))
             return
 
@@ -1714,6 +1785,8 @@ class Bot:
             settings=self._settings_rows(), settings_pending=sorted(self.pending_settings),
             stale=self._stale_status(), watch=self._watch_rows(), can_rescan=not self.pos and not self.final, rescan_pending=self.pending_rescan,
             can_close=bool(p) and not self.final and unreal > 0, close_pending=self.pending_close,
+            stop_range=self.stop_range() if p and not self.final else None, stop_pending=self.pending_stop,
+            stop_manual=bool(p and p.get("manual_stop")),
             paused=self.paused, update=self.update,
             views={s: v for s, v in self.views.items() if s in self.watch or s == self.symbol},
             **self.view,
@@ -1890,6 +1963,8 @@ class Bot:
                 self.check_midday_rescan(now)
                 if self.pending_close:
                     self.close_by_hand()
+                if self.pending_stop is not None:
+                    self.move_stop_by_hand()
                 if self.pending_rescan:
                     self.rescan()
                 self.step()
@@ -1911,7 +1986,8 @@ class Bot:
                 if self.pending_settings:
                     self.apply_pending_settings()          # takes effect now, between checks
                     self.publish()
-                if remaining <= 0 or stop_file.exists() or self.pending_bm or self.pending_rescan or self.pending_close:
+                if remaining <= 0 or stop_file.exists() or self.pending_bm or self.pending_rescan or self.pending_close \
+                        or self.pending_stop is not None:
                     break
                 _time.sleep(min(2.0 if self.dashboard is not None else 15.0, max(1.0, remaining)))
                 self.beat()

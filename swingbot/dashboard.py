@@ -56,6 +56,7 @@ class Dashboard:
         self.on_setting = None                  # set by the bot: callable(key, value) -> message
         self.on_close = None                    # set by the bot: callable() -> message (closes a winning trade)
         self.on_pause = None                    # set by the bot: callable(paused) -> message (no new trades)
+        self.on_stop = None                     # set by the bot: callable(price) -> message (moves the stop)
         self._chart_json: dict[str, bytes] = {} # status with another watched symbol's chart
         self.token = secrets.token_urlsafe(18)  # proves a change came from a page this server served
         # On the network a key is always required; one is generated if you didn't set one.
@@ -89,7 +90,7 @@ class Dashboard:
 
             def _may_control(self) -> bool:
                 if dash.on_bar_size is None and dash.on_rescan is None and dash.on_setting is None \
-                        and dash.on_close is None and dash.on_pause is None:
+                        and dash.on_close is None and dash.on_pause is None and dash.on_stop is None:
                     return False
                 try:
                     local = ipaddress.ip_address(self.client_address[0].split("%")[0]).is_loopback
@@ -111,7 +112,7 @@ class Dashboard:
                 if not self._allowed(url):
                     return
                 handlers = {"/bar-size": dash.on_bar_size, "/rescan": dash.on_rescan, "/setting": dash.on_setting,
-                            "/close": dash.on_close, "/pause": dash.on_pause}
+                            "/close": dash.on_close, "/pause": dash.on_pause, "/stop": dash.on_stop}
                 if url.path not in handlers:
                     self.send_error(404)
                     return
@@ -134,6 +135,8 @@ class Dashboard:
                         msg = handler(str(body["key"]), body["value"])
                     elif url.path == "/pause":
                         msg = handler(bool(body["paused"]))
+                    elif url.path == "/stop":
+                        msg = handler(body["price"])
                     else:
                         msg = handler()
                 except (ValueError, KeyError, TypeError) as e:
