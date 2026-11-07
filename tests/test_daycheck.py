@@ -103,3 +103,28 @@ def test_site_shows_periods_and_checks(tmp_path):
     a = d["accounts"]["alpaca-paper"]
     assert a["periods"][0]["changes"] == ["(first recorded settings)"] and a["periods"][0]["days"] == 1
     assert d["checks"][0]["matched"] == 1 and d["check_summary"]["avg_pct_per_side"] == 0.03
+
+
+def test_your_decisions_are_not_counted_as_slippage():
+    """Nov 6: MSTR short, closed by hand at 13:02; the backtest held it to the 15:50 close."""
+    bt_t = pd.DataFrame([dict(symbol="MSTR", side="short", kind="short bounce", entry_time="09:55", entry=128.0544,
+                              exit=128.7257, reason="flatten", pnl=-108.76)])
+    live_t = [dict(symbol="MSTR", side=-1, kind="short bounce", entry_time="09:55", entry=127.805687, exit=126.61,
+                   pnl=191.31, reason="closed by you", shares=160)]
+    r = daycheck.compare(live_t, bt_t, 5)
+    p = r["pairs"][0]
+    assert p["your_exit"] and not p["exit_compared"] and p["exit_cost"] is None
+    assert p["entry_cost"] == pytest.approx(0.2487) and p["cost_dollars"] == pytest.approx(0.2487 * 160, abs=0.01)
+    assert r["slippage_pct_per_side"] == pytest.approx(0.194, abs=0.001) and r["sides_measured"] == 1
+    assert r["decisions_dollars"] == pytest.approx(2.1157 * 160, abs=0.05) and r["decisions"] == ["MSTR"]
+    text = daycheck._slip_text(dict(r, slippage_setting=0.02))
+    assert "0.194% a side worse" in text and "Your decisions (MSTR): +$338" in text
+    # a stop you moved yourself is your decision too, even though it ended as a stop
+    live_t[0].update(reason="trail", stop_by_you=True)
+    bt_t.loc[0, "reason"] = "stop"
+    r = daycheck.compare(live_t, bt_t, 5)
+    assert r["pairs"][0]["your_exit"] and r["sides_measured"] == 1
+    # both stopped by the bot's own stops: the exit counts as a fill
+    live_t[0].update(stop_by_you=False)
+    r = daycheck.compare(live_t, bt_t, 5)
+    assert r["pairs"][0]["exit_compared"] and r["sides_measured"] == 2 and r["decisions_dollars"] == 0

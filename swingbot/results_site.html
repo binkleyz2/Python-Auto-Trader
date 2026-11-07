@@ -465,13 +465,14 @@ function periods(a) {
 function checks() {
   const rows = D.checks || [], s = D.check_summary || {};
   $("check-note").textContent = s.avg_pct_per_side == null ? "after each session" :
-    `fills averaged ${s.avg_pct_per_side >= 0 ? "+" : ""}${s.avg_pct_per_side.toFixed(3)}% a side vs the backtest (it assumes ${s.setting}%)`;
+    `fills averaged ${Math.abs(s.avg_pct_per_side).toFixed(3)}% a side ${s.avg_pct_per_side > 0 ? "worse" : "better"} than the backtest over ${s.sides} fill(s) (it assumes ${s.setting}%)`;
   tableOf($("checks"), [
     {h: "Date", f: c => c.date}, {h: "Bot", n: 1, f: c => `${c.live_trades} · ${usd(c.live_pnl, true)}`, c: c => cls(c.live_pnl)},
     {h: "Backtest", n: 1, f: c => `${c.bt_trades} · ${usd(c.bt_pnl, true)}`, c: c => cls(c.bt_pnl)},
     {h: "Same", n: 1, f: c => c.matched}, {h: "Only bot", n: 1, f: c => c.live_only}, {h: "Only test", n: 1, f: c => c.bt_only},
     {h: "Fill cost", n: 1, f: c => c.slippage_dollars == null ? "–" : usd(-c.slippage_dollars, true), c: c => cls(-(c.slippage_dollars || 0))},
-    {h: "% a side", n: 1, f: c => c.slippage_pct_per_side == null ? "–" : c.slippage_pct_per_side.toFixed(3)}],
+    {h: "% a side", n: 1, f: c => c.slippage_pct_per_side == null ? "–" : c.slippage_pct_per_side.toFixed(3)},
+    {h: "Your decisions", n: 1, f: c => c.decisions_dollars ? usd(c.decisions_dollars, true) : "–", c: c => cls(c.decisions_dollars || 0)}],
     rows, "The bot checks itself against a backtest after each session (from v1.23.0).");
 }
 

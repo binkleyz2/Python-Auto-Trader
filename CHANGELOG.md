@@ -4,6 +4,17 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.28.0 - 2026-11-06
+
+- **Evening check: fills measured like for like.** Slippage now counts every matched entry, but an exit only
+  when the bot and the backtest left the same way (both stopped, both at the target, both at the 3:50 close).
+  A trade you closed with Close now, the kill switch, or whose stop you moved yourself is **your decision**, shown
+  separately ("Your decisions (MSTR): +$338.51 against what the backtest would have done"), not as a fill cost.
+  Before, an early close by hand looked like a large negative slippage (-0.725% a side on Nov 6 instead of the
+  real +0.194% on the entry). The day report, the log and the results website (a new "Your decisions" column)
+  all show it this way; the website's average is weighted by the number of fills measured.
+- Trade records now note when the stop had been set by you.
+
 ## v1.27.1 - 2026-11-06
 
 - **Dashboard: the open trade is in "Trades today".** The list showed only finished trades; the trade still

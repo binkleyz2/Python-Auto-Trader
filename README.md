@@ -465,7 +465,13 @@ On Windows, use Task Scheduler. Only add `--live --yes` once you trust the dry r
 After each session the bot backtests the day on the same stocks it watched, with the settings it used and
 the same starting account value, and lines the trades up with what it really did: the same trades in both
 (and how much worse or better the real fills were), trades only the bot made, and trades only the backtest
-made. It goes in the day report, the results website ("Live vs backtest") and `logs/<day>-check.json`. If real
+made.
+
+Fills are compared only like for like: every matched entry, and an exit only when both sides left the same way
+(both stopped out, both at the target, or both at the 3:50 close). An exit **you** chose (Close now, the kill
+switch, or a stop you moved yourself) isn't slippage: it's shown separately as **"your decisions"**, the
+difference it made against what the backtest would have done. Trades only the bot made are usually explained
+by that too: the bot holds one trade at a time, so closing one early frees it for the next. It goes in the day report, the results website ("Live vs backtest") and `logs/<day>-check.json`. If real
 fills keep coming in worse than `slippage_pct` assumes, raise it so backtests stay honest. By hand, for a day
 in the last week: `py -m swingbot.daycheck 2026-11-06`. It can't copy a midday rescan, a bar-size change
 during the day, a trade you closed with Close now, or partial fills exactly.

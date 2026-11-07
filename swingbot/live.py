@@ -1525,6 +1525,7 @@ class Bot:
                                 reason=reason, entry_time=p["entry_clock"], exit_time=now_et().strftime("%H:%M"),
                                 entry_x=p["entry_x"], exit_x=max(exit_x, p["entry_x"]),
                                 init_stop=p["init_stop"], final_stop=p["stop"], target=p.get("target"),
+                                stop_by_you=bool(p.get("set_by_you")),
                                 stop_steps=[list(x) for x in p.get("stop_steps") or []], line=p.get("line")))
         self.pos = None
         self.save_state()

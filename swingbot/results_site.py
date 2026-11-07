@@ -171,10 +171,14 @@ def collect(workdir: Path, cfg) -> dict:
         except (OSError, ValueError):
             continue
         checks.append({k: c.get(k) for k in ("date", "live_trades", "bt_trades", "matched", "live_pnl", "bt_pnl", "gap",
-                                              "slippage_dollars", "slippage_pct_per_side", "slippage_setting")}
+                                              "slippage_dollars", "slippage_pct_per_side", "slippage_setting",
+                                              "decisions_dollars", "sides_measured")}
                       | dict(live_only=len(c.get("live_only") or []), bt_only=len(c.get("bt_only") or [])))
-    pcts = [c["slippage_pct_per_side"] for c in checks if c.get("slippage_pct_per_side") is not None]
-    check_summary = dict(days=len(checks), avg_pct_per_side=round(sum(pcts) / len(pcts), 4) if pcts else None,
+    # weighted by how many fills each day measured (older files without the count weigh 1)
+    w = [(c["slippage_pct_per_side"], c.get("sides_measured") or 1) for c in checks
+         if c.get("slippage_pct_per_side") is not None]
+    check_summary = dict(days=len(checks), sides=sum(n for _, n in w),
+                         avg_pct_per_side=round(sum(x * n for x, n in w) / sum(n for _, n in w), 4) if w else None,
                          setting=getattr(cfg, "slippage_pct", None),
                          gap=round(sum(c.get("gap") or 0 for c in checks), 2))
     default = account_label(cfg)

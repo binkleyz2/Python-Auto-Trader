@@ -35,8 +35,22 @@ def _mins(hhmm: str) -> int:
         return -10_000
 
 
+# how a trade ended, in words both sides use (live "end of day" = backtest "flatten", etc.)
+EXIT_KIND = {"stop": "stop", "trail": "stop", "breakeven": "stop", "target": "target", "flatten": "close",
+             "end of day": "close", "closed by you": "you", "kill switch": "you"}
+
+
+def _exit_kind(reason: str) -> str:
+    return EXIT_KIND.get(str(reason or "").strip().lower(), "other")
+
+
 def compare(live: list[dict], bt: pd.DataFrame, bar_minutes: int) -> dict:
-    """Match the bot's trades with the backtest's (same stock and side, entries within two bars)."""
+    """Match the bot's trades with the backtest's (same stock and side, entries within two bars).
+
+    Fill quality is measured only where it's like for like: every matched entry, and an exit only when both
+    left the same way (both stopped out, both at the target, or both at the end-of-day close) and the stop
+    wasn't one you set. An exit you chose (Close now, the kill switch, a stop you moved) is "your decision":
+    its effect is shown on its own, not counted as slippage."""
     btl = bt.to_dict("records") if len(bt) else []
     used, pairs, live_only = set(), [], []
     for t in live:
@@ -56,14 +70,23 @@ def compare(live: list[dict], bt: pd.DataFrame, bar_minutes: int) -> dict:
         sgn = -1 if side == "short" else 1
         shares = int(t.get("shares") or 0)
         entry_cost = round((float(t["entry"]) - float(b["entry"])) * sgn, 4)     # + = the bot paid more
-        exit_cost = round((float(b["exit"]) - float(t["exit"])) * sgn, 4)        # + = the bot got less
+        exit_diff = round((float(b["exit"]) - float(t["exit"])) * sgn, 4)        # + = the bot got less
+        lk, bk = _exit_kind(t.get("reason")), _exit_kind(b["reason"])
+        yours = lk == "you" or bool(t.get("stop_by_you"))
+        same_exit = lk == bk and lk in ("stop", "target", "close") and not yours
         pairs.append(dict(symbol=t["symbol"], side=side, kind=t.get("kind", ""), shares=shares,
                           live_in=t.get("entry_time"), bt_in=b["entry_time"],
                           live_entry=float(t["entry"]), bt_entry=float(b["entry"]), entry_cost=entry_cost,
-                          live_exit=float(t["exit"]), bt_exit=float(b["exit"]), exit_cost=exit_cost,
+                          entry_pct=round(entry_cost / float(b["entry"]) * 100, 4) if float(b["entry"]) else None,
+                          live_exit=float(t["exit"]), bt_exit=float(b["exit"]),
                           live_reason=t.get("reason", ""), bt_reason=b["reason"],
+                          exit_compared=same_exit, your_exit=yours,
+                          exit_cost=exit_diff if same_exit else None,
+                          exit_pct=round(exit_diff / float(b["exit"]) * 100, 4) if same_exit and float(b["exit"]) else None,
                           live_pnl=round(float(t["pnl"]), 2), bt_pnl=round(float(b["pnl"]), 2),
-                          cost_dollars=round((entry_cost + exit_cost) * shares, 2)))
+                          cost_dollars=round((entry_cost + (exit_diff if same_exit else 0)) * shares, 2),
+                          decision_dollars=round(-exit_diff * shares, 2) if yours else 0.0,
+                          other_exit_dollars=round(-exit_diff * shares, 2) if not same_exit and not yours else 0.0))
     bt_only = [dict(symbol=b["symbol"], side=b.get("side", "long"), kind=b["kind"], entry_time=b["entry_time"],
                     entry=float(b["entry"]), exit=float(b["exit"]), reason=b["reason"], pnl=round(float(b["pnl"]), 2))
                for i, b in enumerate(btl) if i not in used]
@@ -72,13 +95,19 @@ def compare(live: list[dict], bt: pd.DataFrame, bar_minutes: int) -> dict:
                reason=t.get("reason", ""), pnl=round(float(t["pnl"]), 2)) for t in live_only]
     live_pnl = round(sum(float(t["pnl"]) for t in live), 2)
     bt_pnl = round(float(bt["pnl"].sum()), 2) if len(bt) else 0.0
-    per_share = [p["entry_cost"] + p["exit_cost"] for p in pairs]
-    pct = [(p["entry_cost"] / p["bt_entry"] + p["exit_cost"] / p["bt_exit"]) * 100 / 2
-           for p in pairs if p["bt_entry"] and p["bt_exit"]]
+    sides = [p["entry_pct"] for p in pairs if p["entry_pct"] is not None] + \
+            [p["exit_pct"] for p in pairs if p["exit_pct"] is not None]
+    entries = [p["entry_pct"] for p in pairs if p["entry_pct"] is not None]
+    exits = [p["exit_pct"] for p in pairs if p["exit_pct"] is not None]
+    avg = lambda xs: round(sum(xs) / len(xs), 4) if xs else None
     return dict(live_trades=len(live), bt_trades=len(btl), matched=len(pairs), live_pnl=live_pnl, bt_pnl=bt_pnl,
-                gap=round(live_pnl - bt_pnl, 2), slippage_dollars=round(sum(p["cost_dollars"] for p in pairs), 2),
-                slippage_per_share=round(sum(per_share) / len(per_share), 4) if per_share else None,
-                slippage_pct_per_side=round(sum(pct) / len(pct), 4) if pct else None,
+                gap=round(live_pnl - bt_pnl, 2),
+                slippage_dollars=round(sum(p["cost_dollars"] for p in pairs), 2),
+                slippage_pct_per_side=avg(sides), entry_pct=avg(entries), exit_pct=avg(exits),
+                sides_measured=len(sides), exits_measured=len(exits),
+                decisions_dollars=round(sum(p["decision_dollars"] for p in pairs), 2),
+                decisions=[p["symbol"] for p in pairs if p["your_exit"]],
+                other_exit_dollars=round(sum(p["other_exit_dollars"] for p in pairs), 2),
                 pairs=pairs, live_only=lo, bt_only=bt_only)
 
 
@@ -129,8 +158,18 @@ def run(bot, cfg, logs: Path, day: str | None = None, live_trades: list[dict] | 
 def _slip_text(res: dict) -> str:
     if res.get("slippage_pct_per_side") is None:
         return ""
-    return (f"Real fills vs the backtest: {res['slippage_dollars']:+.2f} in all, about "
-            f"{res['slippage_pct_per_side']:+.3f}% a side (the backtest assumes {res.get('slippage_setting')}%).")
+    worse = res["slippage_pct_per_side"] > 0
+    t = (f"Fills: {abs(res['slippage_pct_per_side']):.3f}% a side {'worse' if worse else 'better'} than the backtest "
+         f"over {res.get('sides_measured', 0)} comparable fill(s), {_money(-res['slippage_dollars'])} "
+         f"(it assumes {res.get('slippage_setting')}%).")
+    if res.get("decisions"):
+        t += (f" Your decisions ({', '.join(res['decisions'])}): {_money(res['decisions_dollars'])} "
+              f"against what the backtest would have done.")
+    return t
+
+
+def _money(x: float) -> str:
+    return ("+" if x > 0 else "-" if x < 0 else "") + f"${abs(x):,.2f}"
 
 
 def html_section(res: dict) -> str:
@@ -146,12 +185,15 @@ def html_section(res: dict) -> str:
     if res["pairs"]:
         out.append('<table style="border-collapse:collapse;margin-bottom:10px;font-size:13px"><tr>'
                    + th("Stock", "left") + th("Entry: bot / test") + th("Exit: bot / test") + th("Exit by: bot / test", "left")
-                   + th("P&L: bot / test") + th("Fill cost") + "</tr>")
+                   + th("P&L: bot / test") + th("Fills vs test") + "</tr>")
         for p in res["pairs"]:
             out.append("<tr>" + td(f"{p['symbol']} {p['side']}", "left")
                        + td(f"{p['live_entry']:.2f} / {p['bt_entry']:.2f}") + td(f"{p['live_exit']:.2f} / {p['bt_exit']:.2f}")
                        + td(f"{p['live_reason']} / {p['bt_reason']}", "left")
-                       + td(f"{p['live_pnl']:+,.2f} / {p['bt_pnl']:+,.2f}") + td(f"{p['cost_dollars']:+,.2f}") + "</tr>")
+                       + td(f"{p['live_pnl']:+,.2f} / {p['bt_pnl']:+,.2f}")
+                       + td(_money(-p["cost_dollars"]) + ("" if p["exit_compared"] else
+                            " (entry only: exit was yours)" if p["your_exit"] else " (entry only: different exits)"))
+                       + "</tr>")
         out.append("</table>")
     for name, rows in (("Only the bot", res["live_only"]), ("Only the backtest", res["bt_only"])):
         if rows:
