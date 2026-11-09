@@ -58,17 +58,23 @@ jobs:
             */*|"") ;;
             *) echo "::warning::DOCKERHUB_REPOSITORY is '$HUB_REPO' - it should be <user>/<image>, e.g. $HUB_REPO/swingbot"; HUB_REPO="$HUB_REPO/swingbot" ;;
           esac
-          tags=""; do_on=false; hub_on=false
+          # The image is built and pushed to one registry (Docker Hub if it's set up), then copied to the other,
+          # so a problem with one (a full registry, say) doesn't stop the other getting it.
+          tags=""; do_on=false; hub_on=false; copy=false
           if [ "${{ github.event_name }}" != "push" ]; then
-            if [ -n "$DO_TOKEN" ] && [ -n "$REPO" ]; then
-              do_on=true; tags="registry.digitalocean.com/$REPO:v$v,registry.digitalocean.com/$REPO:latest"
-            fi
-            if [ -n "$HUB_TOKEN" ] && [ -n "$HUB_REPO" ]; then
-              hub_on=true; tags="${tags:+$tags,}docker.io/$HUB_REPO:v$v,docker.io/$HUB_REPO:latest"
+            [ -n "$DO_TOKEN" ] && [ -n "$REPO" ] && do_on=true
+            [ -n "$HUB_TOKEN" ] && [ -n "$HUB_REPO" ] && hub_on=true
+            if $hub_on; then
+              tags="docker.io/$HUB_REPO:v$v,docker.io/$HUB_REPO:latest"
+              $do_on && copy=true
+            elif $do_on; then
+              tags="registry.digitalocean.com/$REPO:v$v,registry.digitalocean.com/$REPO:latest"
             fi
           fi
           echo "do=$do_on" >> "$GITHUB_OUTPUT"
           echo "hub=$hub_on" >> "$GITHUB_OUTPUT"
+          echo "copy_to_do=$copy" >> "$GITHUB_OUTPUT"
+          echo "do_repo=$REPO" >> "$GITHUB_OUTPUT"
           echo "hub_user=${HUB_REPO%%/*}" >> "$GITHUB_OUTPUT"
           echo "hub_repo=$HUB_REPO" >> "$GITHUB_OUTPUT"
           if [ -n "$HUB_TOKEN" ] && [ -n "$HUB_REPO" ]; then echo "scan=true" >> "$GITHUB_OUTPUT"; fi
@@ -100,7 +106,19 @@ jobs:
           printf '%s' "$t" | docker login docker.io --username "${{ steps.v.outputs.hub_user }}" --password-stdin
           echo "HUB_PAT=$t" >> "$GITHUB_ENV"            # the trimmed token, for the scans below (masked)
 
+      # Docker Hub with immutable tags won't take a version twice: when it already has this one (a run started
+      # again to finish the copy to DigitalOcean, say), it isn't built and pushed again.
+      - name: Already on Docker Hub?
+        id: have
+        if: steps.v.outputs.hub == 'true'
+        run: |
+          if docker buildx imagetools inspect "docker.io/${{ steps.v.outputs.hub_repo }}:v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then
+            echo "Docker Hub already has v${{ steps.v.outputs.version }}: not pushing it again"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build${{ steps.v.outputs.push == 'true' && ' and push' || '' }}
+        if: steps.have.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -108,6 +126,16 @@ jobs:
           push: ${{ steps.v.outputs.push == 'true' }}
           tags: ${{ steps.v.outputs.tags }}
           build-args: VERSION=${{ steps.v.outputs.version }}
+
+      - name: Copy to the DigitalOcean registry
+        if: steps.v.outputs.copy_to_do == 'true'
+        run: |
+          src=docker.io/${{ steps.v.outputs.hub_repo }}:v${{ steps.v.outputs.version }}
+          dst=registry.digitalocean.com/${{ steps.v.outputs.do_repo }}
+          if ! docker buildx imagetools create -t "$dst:v${{ steps.v.outputs.version }}" -t "$dst:latest" "$src"; then
+            echo "::error::Couldn't copy the image to $dst. If it says 'quota exceeded', the registry is full: in DigitalOcean, Container Registry, delete old tags, run garbage collection, then run this workflow again (Docker Hub already has this version)."
+            exit 1
+          fi
 
       - name: Check the image starts
         if: steps.v.outputs.push != 'true'
