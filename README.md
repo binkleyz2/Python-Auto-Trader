@@ -542,6 +542,11 @@ unless you make it private there (your plan decides how many private ones you ge
 by anyone, with no login: `docker run ... <user>/swingbot`. The image holds no keys or settings, and the
 source is public anyway (GPL-3.0).
 
+To share a **private** Docker Hub repository: on Docker Hub open the repository, then **Settings >
+Collaborators**, and add the other person's Docker ID. They sign in with their own account
+(`docker login`, ideally with a read-only access token of theirs) and pull `<user>/swingbot` as usual. To stop
+sharing, remove them there. (A repository owned by a Docker Hub organization uses team permissions instead.)
+
 With neither set up, it only builds the image as a check. To push the current version straight away: Actions >
 Docker image > Run workflow.
 

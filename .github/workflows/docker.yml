@@ -8,7 +8,7 @@
 #   DigitalOcean:  secret DIGITALOCEAN_ACCESS_TOKEN (API token, registry read+write)
 #                  variable DOCR_REPOSITORY  <your-registry>/swingbot   (e.g. zelwyn/swingbot)
 #   Docker Hub:    secret DOCKERHUB_TOKEN (a Docker Hub access token, Read & Write)
-#                  variable DOCKERHUB_REPOSITORY  <your Docker Hub user>/swingbot   (e.g. binkleyz2/swingbot)
+#                  variable DOCKERHUB_REPOSITORY  <your Docker Hub user>/swingbot   (e.g. binkleyz/swingbot)
 # With neither, the image is still built (as a check) but not pushed anywhere.
 name: Docker image
 
