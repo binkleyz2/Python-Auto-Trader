@@ -127,6 +127,18 @@ jobs:
           tags: ${{ steps.v.outputs.tags }}
           build-args: VERSION=${{ steps.v.outputs.version }}
 
+      - name: Point Docker Hub's latest at this version
+        if: steps.have.outputs.skip == 'true'
+        run: |
+          hub=docker.io/${{ steps.v.outputs.hub_repo }}
+          want=$(docker buildx imagetools inspect "$hub:v${{ steps.v.outputs.version }}" --format '{{json .Manifest.Digest}}')
+          have=$(docker buildx imagetools inspect "$hub:latest" --format '{{json .Manifest.Digest}}' 2>/dev/null || true)
+          if [ "$want" = "$have" ]; then echo "latest is already v${{ steps.v.outputs.version }}"; exit 0; fi
+          if ! docker buildx imagetools create -t "$hub:latest" "$hub:v${{ steps.v.outputs.version }}"; then
+            echo "::error::Docker Hub wouldn't move latest. If it mentions immutability, limit immutable tags to the version tags (a rule like v.*) in the repository's settings on Docker Hub, then run this again."
+            exit 1
+          fi
+
       - name: Copy to the DigitalOcean registry
         if: steps.v.outputs.copy_to_do == 'true'
         run: |
