@@ -6,12 +6,8 @@ cd /data
 setup() {
   created=""
   if [ ! -f config.yaml ]; then
-    # the example, with the settings a container needs: the dashboard reachable from outside the container,
-    # no browser to open, no dashboard picture (no browser in the image)
-    sed -e 's/^dashboard_lan: .*/dashboard_lan: true        # in Docker: reachable through the published port (needs the key)/' \
-        -e 's/^dashboard_open_browser: .*/dashboard_open_browser: false/' \
-        -e 's/^dashboard_jpg: .*/dashboard_jpg: false       # no browser in the image/' \
-        /app/config.example.yaml > config.yaml
+    # this image's example: Public.com only, with the settings a container needs
+    cp /app/config.example.yaml config.yaml
     created="$created config.yaml"
   fi
   if [ ! -f .env ]; then
@@ -22,9 +18,10 @@ setup() {
   mkdir -p logs
   if [ -n "$created" ]; then
     echo "swingbot: created$created in the folder you mounted at /data."
-    echo "  1. Put your broker API keys in .env (and the SMTP login for the email report, if you want it)."
-    echo "  2. Check config.yaml: broker, alpaca_paper, watchlist, risk, and set your own dashboard_key."
-    echo "  3. Start the container again."
+    echo "  1. Put your Public.com API secret key and account ID in .env (and the SMTP login for the email"
+    echo "     report, if you want it)."
+    echo "  2. Check config.yaml: the watchlist, risk, and set your own dashboard_key."
+    echo "  3. Start the container again. It's a dry run (no orders) until you start it with: daemon --live --yes"
     return 1
   fi
   return 0

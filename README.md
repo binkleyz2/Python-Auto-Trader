@@ -486,7 +486,9 @@ helped from a good week.
 ## Docker
 
 swingbot also comes as a Docker image, for running it on a server, a NAS or a cloud droplet instead of a
-Windows PC, or for giving it to someone else. The image holds only the program. Each person's `config.yaml`,
+Windows PC, or for giving it to someone else. **The Docker image is for Public.com only**: it has no Alpaca or
+NinjaTrader. Its `config.yaml` and `.env` templates have only Public's settings and keys, and it refuses any
+other broker. The image holds only the program. Each person's `config.yaml`,
 `.env` (their own API keys), logs and backtest data stay in a folder on their machine, mounted at `/data`,
 so nothing private is ever in the image.
 
@@ -495,19 +497,20 @@ so nothing private is ever in the image.
 ```bash
 mkdir swingbot-data
 docker run --rm -v "$PWD/swingbot-data:/data" registry.digitalocean.com/REGISTRY/swingbot setup
-# fill in swingbot-data/.env (broker keys) and check swingbot-data/config.yaml (broker, alpaca_paper,
-# watchlist, risk, and set your own dashboard_key), then:
+# put your Public.com API secret key and account ID in swingbot-data/.env, check swingbot-data/config.yaml
+# (watchlist, risk, and set your own dashboard_key), then:
 docker run -d --name swingbot --restart unless-stopped -p 127.0.0.1:8765:8765 \
   -v "$PWD/swingbot-data:/data" registry.digitalocean.com/REGISTRY/swingbot            # dry run, every day
 ```
 
 The container runs **`daemon`**: it starts the session at 08:00 ET on every market day (weekends and NYSE
 holidays skipped), waits for it to finish, and sleeps until the next one, the job Task Scheduler does on a PC.
-It starts as a **dry run** (no orders). For real orders, use `daemon --live --yes` as the command, only after
-trying it on a paper account. Started mid-session, it joins today's session at once and picks up any open trade.
+It starts as a **dry run**: real Public prices, signals and the dashboard, but no orders. Public has no paper
+account, so watch the dry run for a while first. For real orders on your Public account, use
+`daemon --live --yes` as the command. Started mid-session, it joins today's session at once and picks up any open trade.
 `docker-compose.example.yml` runs the bot and the results website together (`docker compose up -d`; update with
 `docker compose pull && docker compose up -d`). Any other command works too, e.g.
-`docker run --rm -v "$PWD/swingbot-data:/data" IMAGE backtest --days 180 --universe dow`.
+`docker run --rm -v "$PWD/swingbot-data:/data" IMAGE fetch` (the last week of bars for the watchlist).
 
 - **Dashboard:** the setup turns on `dashboard_lan`, so it's reachable through the published port with the
   `dashboard_key`. The buttons (Close now, Move, Pause) only work for network viewers with
@@ -515,8 +518,10 @@ trying it on a paper account. Started mid-session, it joins today's session at o
   network, or put it behind an https proxy. Don't open it to the internet.
 - **Results website:** `site` in a second container. Use `site_cert` for https, or `site_http_lan: true` for
   plain http with the key behind your own https proxy.
-- **Not in the image:** a browser, so `dashboard_jpg` is off. NinjaTrader needs its desktop app on the same
-  machine, so in Docker it's Alpaca or Public.
+- **Not in the image:** a browser, so `dashboard_jpg` is off. There's also no Alpaca or NinjaTrader, and
+  therefore none of the Alpaca-history commands: `download` and `backtest --days` need Alpaca's market data.
+  In the image, backtest with your own CSV files (`backtest --data FOLDER`), use `fetch` (the last week from
+  Public), or try `demo`.
 - The time zone is New York inside the container, wherever it runs.
 
 **Publishing the image (DigitalOcean Container Registry)**

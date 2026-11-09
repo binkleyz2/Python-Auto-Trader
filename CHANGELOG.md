@@ -4,6 +4,17 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.30.0 - 2026-11-09
+
+- **The Docker image is Public.com only.** Its own `config.yaml` and `.env` templates (made while the image
+  is built, from the normal ones) have `broker: public` and only Public's settings and keys. The Alpaca and
+  NinjaTrader code and the Alpaca library aren't in the image, and it refuses any other broker. `setup` says
+  what to fill in. The dry run is the default (Public has no paper account); `daemon --live --yes` places
+  real orders. `download` and `backtest --days` need Alpaca's market data, so in the image they say so and
+  point to `backtest --data`, `fetch` and `demo`.
+- Outside Docker nothing changes: the repo's `config.example.yaml` and `.env.example`, and running on your PC,
+  still offer all three brokers.
+
 ## v1.29.0 - 2026-11-09
 
 - **Docker image.** `Dockerfile`, a first-run `setup` (creates `config.yaml` and `.env` in the folder mounted at

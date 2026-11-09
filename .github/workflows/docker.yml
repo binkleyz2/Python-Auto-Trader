@@ -75,5 +75,13 @@ jobs:
           mkdir -p data
           docker run --rm -v "$PWD/data:/data" swingbot:check setup
           test -f data/config.yaml && test -f data/.env
+          # Public.com only: broker fixed, no Alpaca or NinjaTrader settings, keys, code or library
+          grep -q "^broker: public" data/config.yaml
+          if grep -qiE "^(alpaca|ninja|price_data)" data/config.yaml; then echo "config has other brokers"; exit 1; fi
+          if grep -qiE "alpaca|ninja" data/.env; then echo ".env has other brokers' keys"; exit 1; fi
+          if docker run --rm --entrypoint python swingbot:check -c "import alpaca" 2>/dev/null; then
+            echo "the Alpaca library is in the image"; exit 1; fi
+          docker run --rm --entrypoint sh swingbot:check -c "test ! -e /app/swingbot/alpaca_live.py && test ! -e /app/swingbot/ninja_live.py"
+          docker run --rm -v "$PWD/data:/data" swingbot:check download --days 5 2>&1 | grep -q "Public.com-only"
           docker run --rm -v "$PWD/data:/data" swingbot:check backtest --help | head -3
           docker run --rm -v "$PWD/data:/data" swingbot:check demo | tail -3

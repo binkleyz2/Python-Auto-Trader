@@ -244,3 +244,36 @@ def test_daemon_live_needs_yes(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as e:
         main(["daemon", "--live"])
     assert "--yes" in str(e.value)
+
+
+def test_docker_image_is_public_only(tmp_path, monkeypatch):
+    """The image's own config.example.yaml / .env.example (made by docker/templates.py) and the lock."""
+    import importlib.util
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("templates", root / "docker" / "templates.py")
+    t = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(t)
+    cfg_text = t.config((root / "config.example.yaml").read_text(encoding="utf-8"))
+    env_text = t.env((root / ".env.example").read_text(encoding="utf-8"))
+    import re
+    keys = re.findall(r"^([a-z_]+)\s*:", cfg_text, re.M)
+    assert "broker" in keys and not [k for k in keys if k.startswith(("alpaca", "ninja")) or k == "price_data"]
+    assert re.search(r"^broker: public$", cfg_text, re.M) and "dashboard_lan: true" in cfg_text
+    assert "dashboard_jpg: false" in cfg_text and "dashboard_open_browser: false" in cfg_text
+    assert "PUBLIC_API_SECRET_KEY=" in env_text and not re.search(r"ALPACA|NINJA", env_text)
+    (tmp_path / "config.yaml").write_text(cfg_text.replace("watchlist_file: watchlist_russell2000.yaml",
+                                                           "watchlist_file: watchlist_dow30.yaml"), encoding="utf-8")
+    from swingbot import config as config_mod
+    monkeypatch.setattr(config_mod, "DOCKER", True)
+    c = config_mod.Config.load(tmp_path / "config.yaml")
+    assert c.broker == "public" and c.dashboard_lan and len(c.watchlist) == 30
+    (tmp_path / "alp.yaml").write_text("broker: alpaca\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Public.com only"):
+        config_mod.Config.load(tmp_path / "alp.yaml")
+    from swingbot.__main__ import main
+    monkeypatch.chdir(tmp_path)
+    for argv in (["download", "--days", "30"], ["backtest", "--days", "30"]):
+        with pytest.raises(SystemExit) as e:
+            main(argv)
+        assert "isn't in this Public.com-only" in str(e.value)

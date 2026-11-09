@@ -165,7 +165,9 @@ def _date_range(args):
     start, end = out
     if start and end and end < start:
         sys.exit(f"--to {end} is before --from {start}")
-    if start and not getattr(args, "days", None) and args.command == "backtest" and not getattr(args, "data_given", False):
+    from .config import DOCKER
+    if start and not getattr(args, "days", None) and args.command == "backtest" and not getattr(args, "data_given", False) \
+            and not DOCKER:
         args.days = (date.today() - start).days + 21            # plus three weeks for the lines' history
         print(f"--from {start}: using {args.days} days of history (--days {args.days})")
     if start or end:
@@ -575,6 +577,12 @@ def main(argv=None) -> None:
     from .data import set_public_rate
     set_public_rate(cfg.public_rate_limit)
     workdir = Path.cwd()
+
+    from .config import DOCKER
+    if DOCKER and (args.command == "download" or (args.command == "backtest" and args.days)):
+        sys.exit("Months of history for backtests come from Alpaca's market data, which isn't in this Public.com-only "
+                 "Docker image.\nBacktest with your own CSV files instead (backtest --data FOLDER), or try the "
+                 "strategy on made-up data with demo.")
 
     if args.command == "download":
         _download(cfg, args, workdir)

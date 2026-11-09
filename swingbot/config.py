@@ -1,11 +1,15 @@
 """All tunable settings in one place. Edit config.yaml rather than this file."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 import yaml
 
+
+# the Docker image is Public.com only (set in its Dockerfile)
+DOCKER = os.environ.get("SWINGBOT_DOCKER") == "public"
 
 @dataclass
 class Config:
@@ -173,6 +177,9 @@ class Config:
             cfg.watchlist = read_watchlist(wf)
         if cfg.broker not in ("public", "alpaca", "ninjatrader"):
             raise ValueError(f"broker must be 'public', 'alpaca' or 'ninjatrader', not {cfg.broker!r}")
+        if DOCKER and cfg.broker != "public":
+            raise ValueError(f"this Docker image trades on Public.com only - set broker: public "
+                             f"(not {cfg.broker!r}); Alpaca and NinjaTrader aren't in it")
         cfg.validate()
         if cfg.ninja_env not in ("demo", "live"):
             raise ValueError(f"ninja_env must be 'demo' or 'live', not {cfg.ninja_env!r}")
