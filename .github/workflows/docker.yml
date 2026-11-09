@@ -38,6 +38,13 @@ jobs:
         run: |
           v=$(python3 -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('swingbot/__init__.py').read()).group(1))")
           echo "version=$v" >> "$GITHUB_OUTPUT"
+          # a pasted value often carries a line break or spaces: take them out (and a pasted registry prefix)
+          REPO=$(printf '%s' "$REPO" | tr -d '[:space:]' | sed -e 's#^registry\.digitalocean\.com/##' -e 's#/*$##')
+          DO_TOKEN=$(printf '%s' "$DO_TOKEN" | tr -d '[:space:]')
+          case "$REPO" in
+            ""|*/*) ;;
+            *) echo "::warning::DOCR_REPOSITORY is '$REPO' - it should be <registry>/<image>, e.g. $REPO/swingbot"; REPO="$REPO/swingbot" ;;
+          esac
           if [ -n "$DO_TOKEN" ] && [ -n "$REPO" ] && [ "${{ github.event_name }}" != "push" ]; then
             echo "push=true" >> "$GITHUB_OUTPUT"
             echo "tags=registry.digitalocean.com/$REPO:v$v,registry.digitalocean.com/$REPO:latest" >> "$GITHUB_OUTPUT"
@@ -53,11 +60,10 @@ jobs:
 
       - name: Log in to the DigitalOcean registry
         if: steps.v.outputs.push == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: registry.digitalocean.com
-          username: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          password: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: |
+          t=$(printf '%s' "$DO_TOKEN" | tr -d '[:space:]')
+          echo "::add-mask::$t"
+          printf '%s' "$t" | docker login registry.digitalocean.com --username "$t" --password-stdin
 
       - name: Build${{ steps.v.outputs.push == 'true' && ' and push' || '' }}
         uses: docker/build-push-action@v6
