@@ -547,6 +547,14 @@ Collaborators**, and add the other person's Docker ID. They sign in with their o
 (`docker login`, ideally with a read-only access token of theirs) and pull `<user>/swingbot` as usual. To stop
 sharing, remove them there. (A repository owned by a Docker Hub organization uses team permissions instead.)
 
+If you turn on **immutable tags** on Docker Hub, apply them to the version tags only (a rule like `v.*`),
+so each release can still move `latest`. A version that's already published can't then be replaced: a fix to
+the image goes out as a new version.
+
+Each run with Docker Hub set up also lists the image's fixable vulnerabilities (Docker Scout, the same scan
+Docker Hub shows) in the run's summary. The image installs Debian's security updates as it's built, and pip
+is taken out once the libraries are in.
+
 With neither set up, it only builds the image as a check. To push the current version straight away: Actions >
 Docker image > Run workflow.
 

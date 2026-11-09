@@ -4,6 +4,15 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.30.1 - 2026-11-09
+
+- **Docker image security update.** The image now installs Debian's security updates while it's built (the
+  published one had an old zlib: 2 High CVEs) and takes pip out after installing the libraries (pip 25.0.1
+  had 5 Medium and 1 Low; the bot never uses pip). Docker Scout finds no fixable vulnerabilities in it.
+- The Docker image workflow lists the image's fixable vulnerabilities (Docker Scout, the same scan Docker Hub
+  shows) in each run's summary, when Docker Hub is set up.
+- Nothing changes in the bot itself.
+
 ## v1.30.0 - 2026-11-09
 
 - **The Docker image is Public.com only.** Its own `config.yaml` and `.env` templates (made while the image
