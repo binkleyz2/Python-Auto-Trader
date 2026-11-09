@@ -97,6 +97,9 @@ email_to:                   # e.g. you@example.com (several: separate with comma
 smtp_host: smtp.gmail.com
 smtp_port: 587
 
+# Always-on mode (py -m swingbot daemon - what the Docker image runs): start each market day's session at
+daemon_start_time: "08:00"   # ET
+
 # Alerts: a push to your phone and/or an email when something goes wrong - an order the bot couldn't
 # confirm, a refused entry, the day report not sent, and (from the results website, if it's running) the bot
 # not started by 9:31 ET or stopped responding. Test with: py -m swingbot.notify
@@ -115,6 +118,8 @@ site_port: 4334
 site_cert:                 # e.g. C:\Users\you\certs\both.pem   (blank = http, this PC only)
 site_lan: true             # true = other devices can view it (needs site_cert, and site_key or dashboard_key)
 site_key:                  # access key (blank = same as dashboard_key); a private key password goes in .env: SITE_CERT_PASSWORD
+site_http_lan: false       # true = no site_cert but still on the network over plain http (key needed) -
+                           # for Docker behind your own https proxy; never straight onto the internet
 
 # Backtest
 starting_equity: 25000

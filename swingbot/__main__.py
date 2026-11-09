@@ -9,6 +9,7 @@
   run --bars 1 --symbol NVDA  watch only NVDA, on 1-minute bars, starting now (works with --live too)
   run --live                trade today's session with orders (asks you to confirm). With broker: alpaca
                             and alpaca_paper: true these go to your Alpaca PAPER account (fake money).
+  daemon                    run every market day by itself (Docker, a server): daemon --live --yes
   site                      the results website (every day's results; https with site_cert). --install keeps
                             it running (starts at logon), --stop / --uninstall
 """
@@ -478,9 +479,10 @@ USES = {
     "scan": {"config", "bars", "symbol"},
     "run": {"config", "live", "bars", "symbol", "yes"},
     "site": {"config", "install", "uninstall", "stop"},
+    "daemon": {"config", "live", "yes", "bars"},
 }
 HINT = {   # where a switch belongs, for the message
-    "data": "fetch / backtest", "out": "backtest", "live": "run", "yes": "run", "days": "backtest / download",
+    "data": "fetch / backtest", "out": "backtest", "live": "run / daemon", "yes": "run / daemon", "days": "backtest / download",
     "universe": "backtest / download", "max_symbols": "backtest", "tries": "backtest", "steps": "backtest",
     "install": "site", "uninstall": "site", "stop": "site", "symbol": "run / scan / backtest / download",
     "bars": "run / scan / backtest / download / fetch",
@@ -526,7 +528,7 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="swingbot", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", action="version", version=f"swingbot {__version__}")
-    ap.add_argument("command", choices=["demo", "backtest", "download", "fetch", "scan", "run", "site"])
+    ap.add_argument("command", choices=["demo", "backtest", "download", "fetch", "scan", "run", "site", "daemon"])
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--data", default="data")
     ap.add_argument("--out", default="backtests")
@@ -581,6 +583,11 @@ def main(argv=None) -> None:
     if args.command == "site":
         from . import results_site
         results_site.main(cfg, args, workdir)
+        return
+
+    if args.command == "daemon":
+        from . import daemon
+        daemon.main(cfg, args, workdir)
         return
 
     if args.command in ("demo", "backtest"):

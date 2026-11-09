@@ -1,0 +1,79 @@
+# Builds the swingbot Docker image (amd64 and arm64) and pushes it to a DigitalOcean Container Registry:
+#  - after each release (the Release workflow), tagged with the version and "latest"
+#  - by hand: Actions > Docker image > Run workflow
+# A change to the Docker files alone only builds it, as a check, without pushing.
+#
+# Set up once, in the repo's Settings > Secrets and variables > Actions:
+#   secret   DIGITALOCEAN_ACCESS_TOKEN   a DigitalOcean API token with registry read+write
+#   variable DOCR_REPOSITORY             <your-registry>/swingbot   (e.g. zach-registry/swingbot)
+# Without them the image is still built (as a check) but not pushed anywhere.
+name: Docker image
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  push:
+    branches: [main]
+    paths: [Dockerfile, .dockerignore, "docker/**", requirements.txt, .github/workflows/docker.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      DO_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      REPO: ${{ vars.DOCR_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Version and whether to push
+        id: v
+        run: |
+          v=$(python3 -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('swingbot/__init__.py').read()).group(1))")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ -n "$DO_TOKEN" ] && [ -n "$REPO" ] && [ "${{ github.event_name }}" != "push" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+            echo "tags=registry.digitalocean.com/$REPO:v$v,registry.digitalocean.com/$REPO:latest" >> "$GITHUB_OUTPUT"
+            echo "Pushing registry.digitalocean.com/$REPO:v$v and :latest"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "tags=swingbot:v$v" >> "$GITHUB_OUTPUT"
+            echo "Build only (no push): needs the DIGITALOCEAN_ACCESS_TOKEN secret and DOCR_REPOSITORY variable, and a release or a manual run"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the DigitalOcean registry
+        if: steps.v.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: registry.digitalocean.com
+          username: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          password: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Build${{ steps.v.outputs.push == 'true' && ' and push' || '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.v.outputs.push == 'true' }}
+          tags: ${{ steps.v.outputs.tags }}
+          build-args: VERSION=${{ steps.v.outputs.version }}
+
+      - name: Check the image starts
+        if: steps.v.outputs.push != 'true'
+        run: |
+          docker buildx build --load -t swingbot:check --build-arg VERSION=${{ steps.v.outputs.version }} .
+          mkdir -p data
+          docker run --rm -v "$PWD/data:/data" swingbot:check setup
+          test -f data/config.yaml && test -f data/.env
+          docker run --rm -v "$PWD/data:/data" swingbot:check backtest --help | head -3
+          docker run --rm -v "$PWD/data:/data" swingbot:check demo | tail -3

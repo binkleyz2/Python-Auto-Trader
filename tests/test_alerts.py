@@ -212,7 +212,7 @@ def test_unused_switches(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as e:
         main(["site", "--live"])
-    assert "site doesn't use --live (--live is for run)" in str(e.value)
+    assert "site doesn't use --live (--live is for run / daemon)" in str(e.value)
     with pytest.raises(SystemExit) as e:
         main(["scan", "--universe", "dow"])
     assert "Nothing was done" in str(e.value)
@@ -223,3 +223,24 @@ def test_unused_switches(tmp_path, monkeypatch, capsys):
     ap.add_argument("--symbol")
     _refuse_unused(ap, SimpleNamespace(command="run", days=5, symbol=None), ["run", "--days", "5"])  # warns only
     assert "ignoring it" in capsys.readouterr().err
+
+
+def test_daemon_picks_the_next_session():
+    from swingbot.daemon import ET as DET, next_start
+    cfg = Config()
+    at = lambda *a: datetime(*a, tzinfo=DET)
+    assert next_start(at(2026, 11, 9, 6, 0), cfg, False) == at(2026, 11, 9, 8, 0)        # Monday morning: today 8:00
+    assert next_start(at(2026, 11, 9, 11, 0), cfg, False) is None                        # started mid-session: now
+    assert next_start(at(2026, 11, 9, 11, 0), cfg, True) == at(2026, 11, 10, 8, 0)       # today done: tomorrow
+    assert next_start(at(2026, 11, 9, 17, 0), cfg, False) == at(2026, 11, 10, 8, 0)      # after the close
+    assert next_start(at(2026, 11, 13, 17, 0), cfg, False) == at(2026, 11, 16, 8, 0)     # Friday evening: Monday
+    assert next_start(at(2026, 11, 25, 17, 0), cfg, False) == at(2026, 11, 27, 8, 0)     # skips Thanksgiving
+    assert next_start(at(2026, 11, 26, 9, 0), cfg, False) == at(2026, 11, 27, 8, 0)      # on the holiday itself
+
+
+def test_daemon_live_needs_yes(tmp_path, monkeypatch):
+    from swingbot.__main__ import main
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as e:
+        main(["daemon", "--live"])
+    assert "--yes" in str(e.value)

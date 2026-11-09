@@ -444,7 +444,7 @@ class Site:
         self.port = int(port or cfg.site_port)
         cert = str(cfg.site_cert or "").strip().strip('"')
         self.cert = Path(os.path.expandvars(os.path.expanduser(cert))) if cert else None
-        self.lan = bool(cfg.site_lan) and self.cert is not None
+        self.lan = bool(cfg.site_lan) and (self.cert is not None or bool(getattr(cfg, "site_http_lan", False)))
         self.key = str(cfg.site_key or cfg.dashboard_key or "").strip()
         if self.lan and not self.key:
             raise SystemExit("site_lan is on but there's no key: set site_key (or dashboard_key) in config.yaml, "
@@ -655,7 +655,7 @@ class Site:
 
     def url(self) -> str:
         if self.cert is None:
-            return f"http://127.0.0.1:{self.port}/"
+            return f"http://{'<this machine>' if self.lan else '127.0.0.1'}:{self.port}/"
         return f"https://{_cert_host(self.cert) or socket.gethostname()}:{self.port}/"
 
     def stop(self) -> None:

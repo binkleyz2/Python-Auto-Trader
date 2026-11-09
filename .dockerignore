@@ -1,0 +1,18 @@
+# only the program goes into the image - never keys, settings, logs or data
+.env
+config.yaml
+*.bak*
+logs/
+data/
+backtests/
+results/
+trades.csv
+*-state.json
+.ninja_device_id
+.git/
+.github/
+.pytest_cache/
+**/__pycache__/
+tests/
+tools/
+*.zip

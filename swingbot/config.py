@@ -93,6 +93,9 @@ class Config:
     smtp_host: str = "smtp.gmail.com"     # mail server (Gmail by default; login in .env: SMTP_USER, SMTP_PASSWORD)
     smtp_port: int = 587                  # 587 = STARTTLS, 465 = SSL
 
+    # --- Always-on mode (py -m swingbot daemon, used by the Docker image)
+    daemon_start_time: str = "08:00"      # ET: when each market day's session starts
+
     # --- Alerts (py -m swingbot.notify sends a test)
     ntfy_topic: str = ""                  # phone push via the free ntfy app: a long random topic name (blank = off)
     ntfy_server: str = "https://ntfy.sh"  # your own ntfy server, if you run one
@@ -107,6 +110,8 @@ class Config:
                                           # (blank = plain http, on this PC only)
     site_lan: bool = True                 # other devices can view it (needs site_cert and a key)
     site_key: str = ""                    # access key for the site (blank = use dashboard_key)
+    site_http_lan: bool = False           # no site_cert: still open it to the network over plain http (with the
+                                          # key) - for Docker behind your own https proxy; not over the internet
 
     # --- Backtest only -------------------------------------------------------------
     starting_equity: float = 25_000.0
@@ -161,7 +166,11 @@ class Config:
             raise ValueError(f"Unknown settings in {path}: {sorted(unknown)}")
         cfg = cls(**data)
         if cfg.watchlist_file:
-            cfg.watchlist = read_watchlist(Path(path).parent / cfg.watchlist_file)
+            wf = Path(path).parent / cfg.watchlist_file
+            shipped = Path(__file__).resolve().parent.parent / Path(cfg.watchlist_file).name
+            if not wf.exists() and not Path(cfg.watchlist_file).is_absolute() and shipped.exists():
+                wf = shipped                     # one of the watchlists that come with swingbot (e.g. in Docker)
+            cfg.watchlist = read_watchlist(wf)
         if cfg.broker not in ("public", "alpaca", "ninjatrader"):
             raise ValueError(f"broker must be 'public', 'alpaca' or 'ninjatrader', not {cfg.broker!r}")
         cfg.validate()

@@ -483,6 +483,60 @@ config.yaml, plus anything changed on the dashboard for that day only). The resu
 into periods with the same settings and shows how each did and what changed, so you can tell a change that
 helped from a good week.
 
+## Docker
+
+swingbot also comes as a Docker image, for running it on a server, a NAS or a cloud droplet instead of a
+Windows PC, or for giving it to someone else. The image holds only the program. Each person's `config.yaml`,
+`.env` (their own API keys), logs and backtest data stay in a folder on their machine, mounted at `/data`,
+so nothing private is ever in the image.
+
+**Running it**
+
+```bash
+mkdir swingbot-data
+docker run --rm -v "$PWD/swingbot-data:/data" registry.digitalocean.com/REGISTRY/swingbot setup
+# fill in swingbot-data/.env (broker keys) and check swingbot-data/config.yaml (broker, alpaca_paper,
+# watchlist, risk, and set your own dashboard_key), then:
+docker run -d --name swingbot --restart unless-stopped -p 127.0.0.1:8765:8765 \
+  -v "$PWD/swingbot-data:/data" registry.digitalocean.com/REGISTRY/swingbot            # dry run, every day
+```
+
+The container runs **`daemon`**: it starts the session at 08:00 ET on every market day (weekends and NYSE
+holidays skipped), waits for it to finish, and sleeps until the next one, the job Task Scheduler does on a PC.
+It starts as a **dry run** (no orders). For real orders, use `daemon --live --yes` as the command, only after
+trying it on a paper account. Started mid-session, it joins today's session at once and picks up any open trade.
+`docker-compose.example.yml` runs the bot and the results website together (`docker compose up -d`; update with
+`docker compose pull && docker compose up -d`). Any other command works too, e.g.
+`docker run --rm -v "$PWD/swingbot-data:/data" IMAGE backtest --days 180 --universe dow`.
+
+- **Dashboard:** the setup turns on `dashboard_lan`, so it's reachable through the published port with the
+  `dashboard_key`. The buttons (Close now, Move, Pause) only work for network viewers with
+  `dashboard_lan_control: true`. The dashboard is plain http: keep the port on `127.0.0.1` or your own
+  network, or put it behind an https proxy. Don't open it to the internet.
+- **Results website:** `site` in a second container. Use `site_cert` for https, or `site_http_lan: true` for
+  plain http with the key behind your own https proxy.
+- **Not in the image:** a browser, so `dashboard_jpg` is off. NinjaTrader needs its desktop app on the same
+  machine, so in Docker it's Alpaca or Public.
+- The time zone is New York inside the container, wherever it runs.
+
+**Publishing the image (DigitalOcean Container Registry)**
+
+The **Docker image** workflow builds it for amd64 and arm64 after each release and pushes
+`registry.digitalocean.com/<your-registry>/swingbot:vX.Y.Z` and `:latest`. To turn it on, in the GitHub repo's
+Settings > Secrets and variables > Actions, add:
+- secret `DIGITALOCEAN_ACCESS_TOKEN`: a DigitalOcean API token with registry read and write,
+- variable `DOCR_REPOSITORY`: `<your-registry>/swingbot`.
+
+Without them it only builds the image as a check. To push the current version straight away: Actions >
+Docker image > Run workflow.
+
+DigitalOcean registries are private. To let someone pull the image, give them a DigitalOcean API token with
+**registry read only** (custom scopes), for `docker login registry.digitalocean.com` with the token as
+both the user name and the password. Or run `doctl registry docker-config --read-only` to make them a
+read-only Docker login file. Either one can read every image in that registry, so keep only what you mean to
+share there, and give each person their own token so you can revoke it. swingbot is GPL-3.0: whoever gets the
+image may also have the source, which is this public repo.
+
 ## Alerts
 
 The bot can tell you when something goes wrong, so you don't have to be watching:

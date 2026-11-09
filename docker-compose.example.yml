@@ -1,0 +1,27 @@
+# swingbot with Docker Compose. Copy to docker-compose.yml, set the image, then:
+#   docker compose run --rm swingbot setup     first time: creates ./swingbot-data/config.yaml and .env
+#   (fill in .env and config.yaml)
+#   docker compose up -d                        start: the bot every market day, and the results website
+#   docker compose logs -f swingbot             watch it
+#   docker compose pull && docker compose up -d update to the newest image
+services:
+  swingbot:
+    image: registry.digitalocean.com/YOUR-REGISTRY/swingbot:latest
+    restart: unless-stopped
+    # dry run every market day (no orders). For real orders:  command: ["daemon", "--live", "--yes"]
+    command: ["daemon"]
+    volumes:
+      - ./swingbot-data:/data
+    ports:
+      - "127.0.0.1:8765:8765"     # the dashboard; drop "127.0.0.1:" to open it to your network (key needed)
+    stop_grace_period: 30s
+
+  results:
+    image: registry.digitalocean.com/YOUR-REGISTRY/swingbot:latest
+    restart: unless-stopped
+    command: ["site"]
+    volumes:
+      - ./swingbot-data:/data
+    ports:
+      - "127.0.0.1:4334:4334"     # the results website (set site_cert for https, or site_http_lan: true)
+    depends_on: [swingbot]

@@ -4,6 +4,23 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.29.0 - 2026-11-09
+
+- **Docker image.** `Dockerfile`, a first-run `setup` (creates `config.yaml` and `.env` in the folder mounted at
+  `/data`, with the settings a container needs) and `docker-compose.example.yml` (the bot and the results
+  website). The image holds only the program; settings, API keys, logs and data stay on the host. Runs as an
+  ordinary user, New York time, amd64 and arm64.
+- **Published to a DigitalOcean Container Registry** by the new "Docker image" workflow after every release
+  (`:vX.Y.Z` and `:latest`), once the `DIGITALOCEAN_ACCESS_TOKEN` secret and `DOCR_REPOSITORY` variable are set
+  in the GitHub repo; until then it builds the image as a check only.
+- **`py -m swingbot daemon`:** always-on mode. It runs the session every market day at `daemon_start_time`
+  (08:00 ET), skipping weekends and NYSE holidays, and joins today's session if started during it. Restarts a
+  failed session up to 3 times. `daemon --live --yes` for real orders. The Docker image runs this by default,
+  as a dry run.
+- `site_http_lan: true`: the results website on the network over plain http (with the key), for running behind
+  your own https proxy.
+- A `watchlist_file` that isn't next to `config.yaml` is looked for among the watchlists that come with swingbot.
+
 ## v1.28.0 - 2026-11-06
 
 - **Evening check: fills measured like for like.** Slippage now counts every matched entry, but an exit only
