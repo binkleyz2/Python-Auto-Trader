@@ -524,7 +524,7 @@ account, so watch the dry run for a while first. For real orders on your Public 
   Public), or try `demo`.
 - The time zone is New York inside the container, wherever it runs.
 
-**Publishing the image (DigitalOcean Container Registry)**
+**Publishing the image (DigitalOcean Container Registry and/or Docker Hub)**
 
 The **Docker image** workflow builds it for amd64 and arm64 after each release and pushes
 `registry.digitalocean.com/<your-registry>/swingbot:vX.Y.Z` and `:latest`. To turn it on, in the GitHub repo's
@@ -532,7 +532,17 @@ Settings > Secrets and variables > Actions, add:
 - secret `DIGITALOCEAN_ACCESS_TOKEN`: a DigitalOcean API token with registry read and write,
 - variable `DOCR_REPOSITORY`: `<your-registry>/swingbot`.
 
-Without them it only builds the image as a check. To push the current version straight away: Actions >
+For **Docker Hub** as well (or instead), add:
+- secret `DOCKERHUB_TOKEN`: a Docker Hub access token (Account settings > Personal access tokens, "Read &
+  Write"), not your password,
+- variable `DOCKERHUB_REPOSITORY`: `<your Docker Hub user>/swingbot`.
+
+It then pushes `docker.io/<user>/swingbot:vX.Y.Z` and `:latest` too. A repository on Docker Hub is **public**
+unless you make it private there (your plan decides how many private ones you get). A public one can be pulled
+by anyone, with no login: `docker run ... <user>/swingbot`. The image holds no keys or settings, and the
+source is public anyway (GPL-3.0).
+
+With neither set up, it only builds the image as a check. To push the current version straight away: Actions >
 Docker image > Run workflow.
 
 DigitalOcean registries are private. To let someone pull the image, give them a DigitalOcean API token with

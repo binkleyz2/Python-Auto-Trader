@@ -1,12 +1,15 @@
-# Builds the swingbot Docker image (amd64 and arm64) and pushes it to a DigitalOcean Container Registry:
+# Builds the swingbot Docker image (amd64 and arm64) and pushes it to a DigitalOcean Container Registry and/or
+# Docker Hub (each one only if it's set up below):
 #  - after each release (the Release workflow), tagged with the version and "latest"
 #  - by hand: Actions > Docker image > Run workflow
 # A change to the Docker files alone only builds it, as a check, without pushing.
 #
 # Set up once, in the repo's Settings > Secrets and variables > Actions:
-#   secret   DIGITALOCEAN_ACCESS_TOKEN   a DigitalOcean API token with registry read+write
-#   variable DOCR_REPOSITORY             <your-registry>/swingbot   (e.g. zach-registry/swingbot)
-# Without them the image is still built (as a check) but not pushed anywhere.
+#   DigitalOcean:  secret DIGITALOCEAN_ACCESS_TOKEN (API token, registry read+write)
+#                  variable DOCR_REPOSITORY  <your-registry>/swingbot   (e.g. zelwyn/swingbot)
+#   Docker Hub:    secret DOCKERHUB_TOKEN (a Docker Hub access token, Read & Write)
+#                  variable DOCKERHUB_REPOSITORY  <your Docker Hub user>/swingbot   (e.g. binkleyz2/swingbot)
+# With neither, the image is still built (as a check) but not pushed anywhere.
 name: Docker image
 
 on:
@@ -28,6 +31,8 @@ jobs:
     env:
       DO_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
       REPO: ${{ vars.DOCR_REPOSITORY }}
+      HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      HUB_REPO: ${{ vars.DOCKERHUB_REPOSITORY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,25 +50,50 @@ jobs:
             ""|*/*) ;;
             *) echo "::warning::DOCR_REPOSITORY is '$REPO' - it should be <registry>/<image>, e.g. $REPO/swingbot"; REPO="$REPO/swingbot" ;;
           esac
-          if [ -n "$DO_TOKEN" ] && [ -n "$REPO" ] && [ "${{ github.event_name }}" != "push" ]; then
+          HUB_REPO=$(printf '%s' "$HUB_REPO" | tr -d '[:space:]' | sed -e 's#^docker\.io/##' -e 's#/*$##')
+          HUB_TOKEN=$(printf '%s' "$HUB_TOKEN" | tr -d '[:space:]')
+          case "$HUB_REPO" in
+            */*|"") ;;
+            *) echo "::warning::DOCKERHUB_REPOSITORY is '$HUB_REPO' - it should be <user>/<image>, e.g. $HUB_REPO/swingbot"; HUB_REPO="$HUB_REPO/swingbot" ;;
+          esac
+          tags=""; do_on=false; hub_on=false
+          if [ "${{ github.event_name }}" != "push" ]; then
+            if [ -n "$DO_TOKEN" ] && [ -n "$REPO" ]; then
+              do_on=true; tags="registry.digitalocean.com/$REPO:v$v,registry.digitalocean.com/$REPO:latest"
+            fi
+            if [ -n "$HUB_TOKEN" ] && [ -n "$HUB_REPO" ]; then
+              hub_on=true; tags="${tags:+$tags,}docker.io/$HUB_REPO:v$v,docker.io/$HUB_REPO:latest"
+            fi
+          fi
+          echo "do=$do_on" >> "$GITHUB_OUTPUT"
+          echo "hub=$hub_on" >> "$GITHUB_OUTPUT"
+          echo "hub_user=${HUB_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          if [ -n "$tags" ]; then
             echo "push=true" >> "$GITHUB_OUTPUT"
-            echo "tags=registry.digitalocean.com/$REPO:v$v,registry.digitalocean.com/$REPO:latest" >> "$GITHUB_OUTPUT"
-            echo "Pushing registry.digitalocean.com/$REPO:v$v and :latest"
+            echo "tags=$tags" >> "$GITHUB_OUTPUT"
+            echo "Pushing: $tags"
           else
             echo "push=false" >> "$GITHUB_OUTPUT"
             echo "tags=swingbot:v$v" >> "$GITHUB_OUTPUT"
-            echo "Build only (no push): needs the DIGITALOCEAN_ACCESS_TOKEN secret and DOCR_REPOSITORY variable, and a release or a manual run"
+            echo "Build only (no push): needs a registry set up (see the top of this file), and a release or a manual run"
           fi
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to the DigitalOcean registry
-        if: steps.v.outputs.push == 'true'
+        if: steps.v.outputs.do == 'true'
         run: |
           t=$(printf '%s' "$DO_TOKEN" | tr -d '[:space:]')
           echo "::add-mask::$t"
           printf '%s' "$t" | docker login registry.digitalocean.com --username "$t" --password-stdin
+
+      - name: Log in to Docker Hub
+        if: steps.v.outputs.hub == 'true'
+        run: |
+          t=$(printf '%s' "$HUB_TOKEN" | tr -d '[:space:]')
+          echo "::add-mask::$t"
+          printf '%s' "$t" | docker login docker.io --username "${{ steps.v.outputs.hub_user }}" --password-stdin
 
       - name: Build${{ steps.v.outputs.push == 'true' && ' and push' || '' }}
         uses: docker/build-push-action@v6
