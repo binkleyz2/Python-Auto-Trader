@@ -10,6 +10,8 @@
 #   Docker Hub:    secret DOCKERHUB_TOKEN (a Docker Hub access token, Read & Write)
 #                  variable DOCKERHUB_REPOSITORY  <your Docker Hub user>/swingbot   (e.g. binkleyz/swingbot)
 # With neither, the image is still built (as a check) but not pushed anywhere.
+# With Docker Hub set up, each run also lists the image's fixable vulnerabilities (Docker Scout, the same scan
+# Docker Hub shows), in the run's summary.
 name: Docker image
 
 on:
@@ -68,6 +70,8 @@ jobs:
           echo "do=$do_on" >> "$GITHUB_OUTPUT"
           echo "hub=$hub_on" >> "$GITHUB_OUTPUT"
           echo "hub_user=${HUB_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "hub_repo=$HUB_REPO" >> "$GITHUB_OUTPUT"
+          if [ -n "$HUB_TOKEN" ] && [ -n "$HUB_REPO" ]; then echo "scan=true" >> "$GITHUB_OUTPUT"; fi
           if [ -n "$tags" ]; then
             echo "push=true" >> "$GITHUB_OUTPUT"
             echo "tags=$tags" >> "$GITHUB_OUTPUT"
@@ -89,11 +93,12 @@ jobs:
           printf '%s' "$t" | docker login registry.digitalocean.com --username "$t" --password-stdin
 
       - name: Log in to Docker Hub
-        if: steps.v.outputs.hub == 'true'
+        if: steps.v.outputs.scan == 'true'
         run: |
           t=$(printf '%s' "$HUB_TOKEN" | tr -d '[:space:]')
           echo "::add-mask::$t"
           printf '%s' "$t" | docker login docker.io --username "${{ steps.v.outputs.hub_user }}" --password-stdin
+          echo "HUB_PAT=$t" >> "$GITHUB_ENV"            # the trimmed token, for the scans below (masked)
 
       - name: Build${{ steps.v.outputs.push == 'true' && ' and push' || '' }}
         uses: docker/build-push-action@v6
@@ -121,3 +126,28 @@ jobs:
           docker run --rm -v "$PWD/data:/data" swingbot:check download --days 5 2>&1 | grep -q "Public.com-only"
           docker run --rm -v "$PWD/data:/data" swingbot:check backtest --help | head -3
           docker run --rm -v "$PWD/data:/data" swingbot:check demo | tail -3
+
+      # Vulnerabilities with a fix available. A build-only run scans the image it just built, and the one
+      # published now for comparison; a publishing run scans what it pushed.
+      - name: Vulnerabilities in this build
+        if: steps.v.outputs.scan == 'true'
+        uses: docker/scout-action@f8c776824083494ab0d56b8105ba2ca85c86e4de   # v1.18.2
+        with:
+          command: cves
+          image: ${{ steps.v.outputs.push == 'true' && format('registry://docker.io/{0}:v{1}', steps.v.outputs.hub_repo, steps.v.outputs.version) || 'local://swingbot:check' }}
+          only-fixed: true
+          dockerhub-user: ${{ steps.v.outputs.hub_user }}
+          dockerhub-password: ${{ env.HUB_PAT }}
+          write-comment: false
+
+      - name: Vulnerabilities in the published image
+        if: steps.v.outputs.scan == 'true' && steps.v.outputs.push != 'true'
+        continue-on-error: true
+        uses: docker/scout-action@f8c776824083494ab0d56b8105ba2ca85c86e4de   # v1.18.2
+        with:
+          command: cves
+          image: registry://docker.io/${{ steps.v.outputs.hub_repo }}:latest
+          only-fixed: true
+          dockerhub-user: ${{ steps.v.outputs.hub_user }}
+          dockerhub-password: ${{ env.HUB_PAT }}
+          write-comment: false

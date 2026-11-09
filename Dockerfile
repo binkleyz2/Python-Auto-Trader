@@ -21,9 +21,16 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_
 WORKDIR /app
 COPY requirements.txt .
 # Public.com only: no test tools, no Alpaca library
-RUN grep -viE '^(pytest|alpaca)' requirements.txt > /tmp/req.txt \
- && pip install -r /tmp/req.txt tzdata \
+# The base image's system packages are brought up to date (security fixes released since it was built), and
+# pip is taken out once the libraries are in: the bot never needs it, and that leaves pip's own CVEs behind.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* \
+ && grep -viE '^(pytest|alpaca)' requirements.txt > /tmp/req.txt \
+ && pip install --upgrade -r /tmp/req.txt tzdata \
  && rm /tmp/req.txt \
+ && python -m pip uninstall -y pip setuptools wheel \
+ && rm -rf /usr/local/lib/python3*/ensurepip \
  && useradd --uid 1000 --create-home --shell /usr/sbin/nologin swingbot
 
 COPY swingbot/ swingbot/
