@@ -5,8 +5,9 @@ Docker image workflow, not part of the image).
 
 The free (Starter) registry holds 500 MB, a few versions of the image. This deletes every version tag but
 the newest `keep` (default 1: the previous version stays, so `latest` keeps working until the new one is in),
-then runs garbage collection, which frees the space, and waits for it to finish (the registry is read-only
-meanwhile). Needs DO_TOKEN in the environment: a DigitalOcean API token with registry read, update and delete.
+and `latest` too when it points to anything else (the copy sets it again), then runs garbage collection, which
+frees the space, and waits for it to finish (the registry is read-only meanwhile). It prints how much of the
+registry is used, and by which repositories, before and after. Needs DO_TOKEN in the environment: a DigitalOcean API token with registry read, update and delete.
 """
 import json
 import os
@@ -34,6 +35,23 @@ def call(method, path, body=None):
             return e.code, {}
 
 
+def usage(registry, when):
+    """Print the registry's storage use and what holds it."""
+    code, data = call("GET", "")
+    reg = data.get("registry") or {}
+    used = reg.get("storage_usage_bytes")
+    _, sub = call("GET", "/subscription")
+    limit = (((sub.get("subscription") or {}).get("tier") or {}).get("included_storage_bytes"))
+    if used is not None:
+        print(f"Registry storage {when}: {used / 1e6:.0f} MB used" + (f" of {limit / 1e6:.0f} MB" if limit else "")
+              + f" (as of {reg.get('storage_usage_bytes_updated_at', '?')})")
+    code, data = call("GET", f"/{registry}/repositoriesV2?per_page=100")
+    for r in data.get("repositories") or []:
+        size = (r.get("latest_manifest") or {}).get("compressed_size_bytes")
+        print(f"  repository {r.get('name')}: {r.get('tag_count')} tags, {r.get('manifest_count')} manifests"
+              + (f", newest {size / 1e6:.0f} MB" if size else ""))
+
+
 def vkey(tag):
     return tuple(int(n) for n in re.findall(r"\d+", tag))
 
@@ -42,6 +60,7 @@ def main():
     target, new = sys.argv[1], sys.argv[2].lstrip("v")
     keep = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     registry, repo = target.split("/", 1)
+    usage(registry, "before")
     code, data = call("GET", f"/{registry}/repositories/{repo}/tags?per_page=200")
     if code == 404:
         print("No swingbot images in the registry yet: nothing to clean")
@@ -49,9 +68,12 @@ def main():
     if code != 200:
         sys.exit(f"Couldn't list the registry's tags (HTTP {code}: {data.get('message', '')}). "
                  "The DigitalOcean token needs registry read, update and delete.")
-    versions = sorted({t["tag"] for t in data.get("tags", []) if re.fullmatch(r"v\d+(\.\d+)*", t["tag"])
-                       and t["tag"] != "v" + new}, key=vkey)
+    tags = {t["tag"]: t.get("manifest_digest") for t in data.get("tags", [])}
+    versions = sorted({t for t in tags if re.fullmatch(r"v\d+(\.\d+)*", t) and t != "v" + new}, key=vkey)
     old = versions[:-keep] if keep else versions
+    kept = {tags[t] for t in (versions[-keep:] if keep else [])}
+    if "latest" in tags and tags["latest"] not in kept:
+        old.append("latest")                    # an older build: it would hold that build's space; the copy sets it again
     print(f"In the registry: {', '.join(versions) or 'no versions'}; keeping {', '.join(versions[-keep:]) if keep else 'none'}")
     for tag in old:
         code, data = call("DELETE", f"/{registry}/repositories/{repo}/tags/{tag}")
@@ -74,6 +96,7 @@ def main():
                 sys.exit("Garbage collection failed; see the registry in DigitalOcean")
             freed = gc.get("freed_bytes")
             print("Garbage collection done" + (f": {freed / 1e6:.0f} MB freed" if freed else ""))
+            usage(registry, "after")
             return
         print(f"  garbage collection: {gc.get('status')}")
         time.sleep(15)

@@ -153,7 +153,14 @@ jobs:
             "${{ steps.v.outputs.do_repo }}" "${{ steps.v.outputs.version }}" 1
           src=docker.io/${{ steps.v.outputs.hub_repo }}:v${{ steps.v.outputs.version }}
           dst=registry.digitalocean.com/${{ steps.v.outputs.do_repo }}
-          if ! docker buildx imagetools create -t "$dst:v${{ steps.v.outputs.version }}" -t "$dst:latest" "$src"; then
+          copy() { docker buildx imagetools create -t "$dst:v${{ steps.v.outputs.version }}" -t "$dst:latest" "$src"; }
+          if ! copy; then
+            # still no room: keep nothing older (the new version is safe on Docker Hub) and try once more
+            echo "No room yet: deleting the previous version too, then trying again"
+            DO_TOKEN=$(printf '%s' "$DO_TOKEN" | tr -d '[:space:]') python3 docker/do_cleanup.py \
+              "${{ steps.v.outputs.do_repo }}" "${{ steps.v.outputs.version }}" 0
+          fi
+          if ! copy; then
             echo "::error::Couldn't copy the image to $dst. If it says 'quota exceeded', the registry is full: in DigitalOcean, Container Registry, delete old tags or move to a bigger plan, then run this workflow again (Docker Hub already has this version)."
             exit 1
           fi
