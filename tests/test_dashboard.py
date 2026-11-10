@@ -32,6 +32,7 @@ def test_dashboard_failure_never_breaks_the_bot(tmp_path):
     bot.dashboard = Broken()
     bot.publish("anything")                       # must not raise
     assert bot.status()["mode"] == "DRY RUN"
+    assert bot.status()["point_value"] == 1.0     # the chart's hover works out P&L and R with it
 
 
 def test_network_sharing_requires_the_key(tmp_path):

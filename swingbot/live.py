@@ -1790,7 +1790,7 @@ class Bot:
             spendable = max(0.0, self.settled_start - self.spent_today)
         now = now_et()
         return dict(
-            version=__version__, mode="LIVE" if self.live else "DRY RUN", state=self.state, final=self.final, unit=self.unit_label,
+            version=__version__, mode="LIVE" if self.live else "DRY RUN", state=self.state, final=self.final, unit=self.unit_label, point_value=self.point_value,
             bar_minutes=self.bm, bar_sizes=self.bar_sizes(), pending_bars=self.pending_bm,
             symbol=self.symbol, pick_reason=self.pick_reason, date=now.strftime("%Y-%m-%d"),
             updated=now.strftime("%H:%M:%S"), epoch=now.timestamp(),

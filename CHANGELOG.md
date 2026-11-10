@@ -4,6 +4,13 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.31.0 - 2026-11-10
+
+- **Trade details on the chart's hover.** Hovering a bar inside a trade (from the entry ▲ along the dashed
+  line to the exit ●) now also shows that trade: long or short and the shares, the entry time and price, the
+  stop in force at that bar, the P&L (and R) had it closed at that bar's close, and the exit time, price,
+  reason and final result. The open trade shows the same, with the stop now if it has been moved since.
+
 ## v1.30.1 - 2026-11-09
 
 - **Docker image security update.** The image now installs Debian's security updates while it's built (the

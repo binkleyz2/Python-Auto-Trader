@@ -89,6 +89,7 @@
          box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 150px; font-variant-numeric: tabular-nums; }
   #tip .row { display: flex; justify-content: space-between; gap: 14px; }
   #tip .row b { font-weight: 600; }
+  #tip .row.sep { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--grid); }
   #tip .lab { color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
@@ -325,6 +326,7 @@ function renderTop(s) {
 function renderChart(s) {
   const svg = $("chart");
   while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const unit = s.unit || "sh";
   const W = svg.clientWidth || 900, H = 400;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const pad = {l: 12, r: 104, t: 14, b: 26};
@@ -491,12 +493,23 @@ function renderChart(s) {
         addRow(tip, L.kind === "support" ? "Support" : "Resistance", fmt(v), cssVar(L.kind === "support" ? "--support" : "--resist"));
       }
     });
+    // a closed trade this bar falls in (entry ▲ to exit ●, the dashed line): what it was doing then, and how it ended
+    trades.forEach(t => {
+      if (b.x < t.entry_x - 1e-9 || b.x > t.exit_x + 1e-9) return;
+      tradeRows(tip, t, b, {
+        title: `${t.side < 0 ? "Short" : "Long"} trade · ${t.shares} ${unit}`,
+        stopAt: stopAt(t.stop_steps, t.init_stop, b.x),
+        exitBar: b.x >= t.exit_x - 1e-9,
+      });
+      const res = t.pnl, r = tradeR(t, res);
+      addRow(tip, `Exit ${t.exit_time || ""}`.trim(), `${fmt(t.exit)} · ${t.reason}`, t.pnl >= 0 ? cssVar("--good") : cssVar("--stop"));
+      addRow(tip, "Result", money(res) + (r == null ? "" : ` (${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R)`));
+    });
     if (p && b.x >= p.entry_x) {
-      let sv = p.init_stop;
-      (p.stop_steps || []).forEach(st2 => { if (st2[0] <= b.x) sv = st2[1]; });
-      // the stop in force during this bar; if it has been raised since, show today's level too
-      if (Math.abs(sv - p.stop) < 1e-9) addRow(tip, "Stop", fmt(sv), cssVar("--stop"));
-      else { addRow(tip, "Stop then", fmt(sv), cssVar("--stop")); addRow(tip, "Stop now", fmt(p.stop), cssVar("--stop")); }
+      const sv = stopAt(p.stop_steps, p.init_stop, b.x);
+      tradeRows(tip, Object.assign({symbol: chartSym}, p), b, {title: `Open trade · ${p.shares} ${unit}`, stopAt: sv});
+      // if the stop has been moved since this bar, show today's level too
+      if (Math.abs(sv - p.stop) > 1e-9) addRow(tip, "Stop now", fmt(p.stop), cssVar("--stop"));
     }
     tip.style.display = "block";
     const wrap = $("chartwrap").getBoundingClientRect();
@@ -506,6 +519,28 @@ function renderChart(s) {
     tip.style.top = Math.max(0, ev.clientY - wrap.top - 20) + "px";
   });
   hit.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
+}
+// the stop in force at bar x, from a trade's stop steps
+function stopAt(steps, init, bx) {
+  let sv = init;
+  (steps || []).forEach(st2 => { if (st2[0] <= bx + 1e-9) sv = st2[1]; });
+  return sv;
+}
+// R multiple of a dollar amount for a trade (1R = what the initial stop risked)
+function tradeR(t, dollars) {
+  const risk = Math.abs(t.entry - t.init_stop) * t.shares * (S.point_value || 1);
+  return risk ? dollars / risk : null;
+}
+// trade rows for one bar: entry, the stop then, and the P&L at that bar's close
+function tradeRows(tip, t, b, o) {
+  const side = t.side || 1, pv = S.point_value || 1;
+  addRow(tip, o.title, "", null, true).classList.add("sep");
+  addRow(tip, `Entry ${t.entry_time || ""}`.trim(), fmt(t.entry), cssVar("--entry"));
+  addRow(tip, "Stop then", fmt(o.stopAt), cssVar("--stop"));
+  if (!o.exitBar) {
+    const pl = (b.c - t.entry) * t.shares * pv * side, r = tradeR(t, pl);
+    addRow(tip, "P&L at this close", money(pl) + (r == null ? "" : ` (${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R)`));
+  }
 }
 function tri(svg, cx, cy, color) {
   el("path", {d: `M${cx},${cy - 1} l-5,9 h10 z`, fill: color, stroke: cssVar("--surface"), "stroke-width": 1.5}, svg);
@@ -518,6 +553,7 @@ function addRow(tip, label, value, color, header) {
   if (header) l.style.fontWeight = "600";
   const v = document.createElement("b"); v.textContent = value;
   row.append(l, v); tip.appendChild(row);
+  return row;
 }
 function placeLabels(svg, labels, xLab, top, bottom) {
   labels.sort((a, b) => a[0] - b[0]);
