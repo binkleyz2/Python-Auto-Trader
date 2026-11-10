@@ -154,3 +154,65 @@ def test_cert_name_and_windows_launcher(tmp_path):
     v = rs.launcher_text(tmp_path, r"C:\bot\config.yaml", r"C:\Python\pythonw.exe")
     assert 'sh.CurrentDirectory = "' in v and "-m swingbot site" in v and ', 0, False' in v   # 0 = no window
     assert '""C:\\Python\\pythonw.exe""' in v
+
+
+def test_site_on_port_recognises_a_running_site(tmp_path):
+    import socket
+    wd = _workdir(tmp_path)
+    for cert in (str(_pem(tmp_path)), ""):                     # https and plain http
+        site = rs.Site(Config(site_cert=cert, site_key="k", dashboard_key="", site_port=0), wd)
+        site.start()
+        try:
+            assert rs._site_on_port(site.port)
+        finally:
+            site.stop()
+    other = socket.socket()                                    # something else on a port: not a site
+    other.bind(("127.0.0.1", 0)); other.listen(1)
+    try:
+        assert not rs._site_on_port(other.getsockname()[1])
+    finally:
+        other.close()
+
+
+def test_a_second_copy_stops_instead_of_retrying(tmp_path, monkeypatch, caplog):
+    first = rs.Site(Config(site_cert="", site_key="", dashboard_key="", site_port=0), _workdir(tmp_path))
+    first.start()
+    try:
+        cfg = Config(site_cert="", site_key="", dashboard_key="", site_port=first.port, alert_email=False)
+        monkeypatch.setattr(rs.Watchdog, "loop", lambda self, stop: None)
+        monkeypatch.setattr(rs.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("retried")))
+        rs.serve(cfg, tmp_path)                                # returns at once
+        assert "Another copy of the results site is already running" in caplog.text
+    finally:
+        first.stop()
+
+
+def test_windows_finds_every_copy_of_the_site(monkeypatch):
+    out = ("11\tC:\\Python\\pythonw.exe -m swingbot site --config \"C:\\b\\config.yaml\"\n"
+           "12\tC:\\Python\\python.exe -m swingbot site --install\n"
+           "13\tC:\\Python\\python.exe -m swingbot run --live\n"
+           "14\t\"C:\\Python\\python.exe\" -m  swingbot site\n"
+           "15\tC:\\Python\\python.exe -m swingbot site --stop\n")
+    monkeypatch.setattr(rs.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    assert rs._windows_site_pids() == [11, 14]
+    net = ("  Proto  Local Address          Foreign Address        State           PID\n"
+           "  TCP    0.0.0.0:4334           0.0.0.0:0              LISTENING       5280\n"
+           "  TCP    0.0.0.0:43340          0.0.0.0:0              LISTENING       77\n"
+           "  TCP    192.168.0.61:4334      192.168.0.9:5123       ESTABLISHED     5280\n")
+    monkeypatch.setattr(rs.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, net, ""))
+    assert rs._windows_port_owner(4334) == 5280 and rs._windows_port_owner(8765) is None
+
+
+def test_stop_running_reports_what_it_could_not_stop(tmp_path, monkeypatch):
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "site.pid").write_text("21", encoding="utf-8")
+    monkeypatch.setattr(rs.os, "name", "nt")
+    monkeypatch.setattr(rs, "_windows_site_pids", lambda: [21, 22])
+    monkeypatch.setattr(rs, "_windows_port_owner", lambda port: 22)
+    monkeypatch.setattr(rs, "_windows_kill", lambda n: None if n == 21 else f"process {n}: Access is denied.")
+    stopped, problems = rs.stop_running(tmp_path, 4334)
+    assert stopped == [21] and problems == ["process 22: Access is denied."]
+    assert (tmp_path / "logs" / "site.pid").exists()           # kept while a copy is still running
+    monkeypatch.setattr(rs, "_windows_kill", lambda n: None)
+    monkeypatch.setattr(rs, "_windows_port_owner", lambda port: None)
+    assert rs.stop_running(tmp_path, 4334) == ([21, 22], []) and not (tmp_path / "logs" / "site.pid").exists()

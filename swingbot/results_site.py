@@ -733,6 +733,11 @@ def serve(cfg, workdir: Path) -> None:
                 site.refresh_cert()                    # a renewed certificate is used without a restart
             except OSError as e:
                 if getattr(e, "winerror", None) in (10048, 10013) or e.errno in (98, 48, 13):
+                    if _site_on_port(cfg.site_port):
+                        log.error("Another copy of the results site is already running on port %s, so this one "
+                                  "stops. To replace it with this version (%s): py -m swingbot site --install",
+                                  cfg.site_port, _version())
+                        return
                     log.error("Port %s is in use - is the site already running? (retrying in %ds)", cfg.site_port, wait)
                 else:
                     log.error("Site problem: %s (retrying in %ds)", e, wait)
@@ -776,29 +781,109 @@ def launcher_text(workdir: Path, config: str, python: str) -> str:
             f'sh.Run "{q(cmd)}", 0, False\r\n')
 
 
-def stop_running(workdir: Path) -> bool:
+def _version() -> str:
+    from . import __version__
+    return __version__
+
+
+def _site_on_port(port: int) -> bool:
+    """Is a swingbot results site answering on this port (on this PC)? Its replies say Server: swingbot-site."""
+    import http.client
+    for tls in (True, False):
+        try:
+            if tls:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+                c = http.client.HTTPSConnection("127.0.0.1", port, timeout=5, context=ctx)
+            else:
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request("GET", "/favicon.ico", headers={"Host": f"127.0.0.1:{port}"})
+            server = c.getresponse().getheader("Server") or ""
+            c.close()
+            return server.startswith("swingbot-site")
+        except (OSError, ssl.SSLError, http.client.HTTPException):
+            continue
+    return False
+
+
+def _windows_site_pids() -> list[int]:
+    """Python processes running the site (`swingbot site`, not --install/--uninstall), other than this one."""
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
+          "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                           text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = []
+    for line in (r.stdout or "").splitlines():
+        n, _, cmd = line.partition("\t")
+        if (n.strip().isdigit() and int(n) != os.getpid() and re.search(r"-m\s+swingbot\s+site\b", cmd)
+                and not re.search(r"--(un)?install\b|--stop\b", cmd)):
+            out.append(int(n))
+    return out
+
+
+def _windows_port_owner(port: int) -> int | None:
+    try:
+        r = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in (r.stdout or "").splitlines():
+        f = line.split()
+        if len(f) >= 5 and f[3].upper() == "LISTENING" and f[1].rsplit(":", 1)[-1] == str(port):
+            return int(f[4]) if f[4].isdigit() else None
+    return None
+
+
+def _windows_kill(n: int) -> str | None:
+    """None when stopped (or already gone), else why not. Only Python processes are stopped."""
+    r = subprocess.run(["tasklist", "/FI", f"PID eq {n}", "/FO", "CSV", "/NH"], capture_output=True, text=True)
+    if str(n) not in (r.stdout or ""):
+        return None                                            # not running any more
+    if "python" not in (r.stdout or "").lower():
+        name = (r.stdout or "").split(",")[0].strip('"') or "another program"
+        return f"port in use by {name} (process {n}), not the site"
+    k = subprocess.run(["taskkill", "/PID", str(n), "/F"], capture_output=True, text=True)
+    if k.returncode == 0:
+        return None
+    why = (k.stderr or k.stdout or "").strip()
+    return f"process {n}: {why or 'taskkill failed'}"
+
+
+def stop_running(workdir: Path, port: int | None = None) -> tuple[list[int], list[str]]:
+    """Stop every running copy of the site: the one in logs/site.pid, any other `swingbot site` process (a
+    copy started at logon, by Task Scheduler or by an older --install), and whatever Python holds the port.
+    Returns (stopped process numbers, problems)."""
     pid = _pid_file(workdir)
     try:
-        n = int(pid.read_text(encoding="utf-8").strip())
+        listed = int(pid.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
-        return False
+        listed = None
+    stopped, problems = [], []
     if os.name == "nt":
-        # only if that process is still a Python (a stale file's number may belong to something else by now)
-        r = subprocess.run(["tasklist", "/FI", f"PID eq {n}", "/FO", "CSV", "/NH"], capture_output=True, text=True)
-        ok = "python" in (r.stdout or "").lower()
-        if ok:
-            ok = subprocess.run(["taskkill", "/PID", str(n), "/F"], capture_output=True, text=True).returncode == 0
-    else:
+        found = [n for n in [listed, *_windows_site_pids(), _windows_port_owner(port) if port else None]
+                 if n and n != os.getpid()]
+        for n in dict.fromkeys(found):
+            why = _windows_kill(n)
+            (problems.append(why) if why else stopped.append(n))
+        if port and not problems:
+            for _ in range(20):                                # wait for the port to be let go
+                if _windows_port_owner(port) is None:
+                    break
+                time.sleep(0.5)
+    elif listed:
         try:
-            os.kill(n, 15)
-            ok = True
+            os.kill(listed, 15)
+            stopped.append(listed)
         except OSError:
-            ok = False
-    try:
-        pid.unlink()
-    except OSError:
-        pass
-    return ok
+            pass
+    if not problems:
+        try:
+            pid.unlink()
+        except OSError:
+            pass
+    return stopped, problems
 
 
 def install(cfg, workdir: Path, config: str) -> None:
@@ -808,12 +893,34 @@ def install(cfg, workdir: Path, config: str) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     vbs = folder / STARTUP_NAME
     vbs.write_text(launcher_text(workdir, str(Path(config).resolve()), _pythonw()), encoding="utf-16")
-    if stop_running(workdir):
-        print("Stopped the copy that was running.")
-        time.sleep(2)
+    stopped, problems = stop_running(workdir, cfg.site_port)
+    if stopped:
+        print(f"Stopped the copy (or copies) that were running: process {', '.join(map(str, stopped))}.")
+    if problems:
+        print("Couldn't stop the results site that's running, so the new version isn't started:")
+        for p in problems:
+            print("  " + p)
+        sys.exit("If it says access is denied, that copy was started as administrator or by Task Scheduler: "
+                 "end it in Task Manager (Details tab, pythonw.exe or python.exe running 'swingbot site'), or "
+                 "run this again from an administrator window. Then run --install again.")
+    pid = _pid_file(workdir)
     subprocess.Popen(["wscript.exe", str(vbs)], cwd=str(workdir))
     site = Site(cfg, workdir)
-    print(f"Results site started in the background, and set to start each time you log on:\n  {vbs}\n")
+    started = None
+    for _ in range(40):                                        # the new copy writes its number once it's serving
+        time.sleep(0.5)
+        try:
+            n = int(pid.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        if n not in stopped:
+            started = n
+            break
+    if started:
+        print(f"Results site v{_version()} running (process {started}), and set to start each time you log on:\n  {vbs}\n")
+    else:
+        print(f"Results site v{_version()} launched, but it isn't serving yet - see logs\\site.log. "
+              f"It's set to start each time you log on:\n  {vbs}\n")
     print(f"Open: {site.url()}" + ("?key=<your site key>" if site.lan else ""))
     print("Log: logs\\site.log.  After a git pull, run --install again to restart it with the new version.")
     if site.lan:
@@ -822,20 +929,28 @@ def install(cfg, workdir: Path, config: str) -> None:
               "your certificate and point to this PC." % site.port)
 
 
-def uninstall(workdir: Path) -> None:
+def uninstall(cfg, workdir: Path) -> None:
     vbs = _startup_folder() / STARTUP_NAME
     if vbs.exists():
         vbs.unlink()
         print(f"Removed {vbs} - it won't start at logon any more.")
-    print("Stopped it." if stop_running(workdir) else "It wasn't running.")
+    stopped, problems = stop_running(workdir, cfg.site_port)
+    for p in problems:
+        print("Couldn't stop it: " + p)
+    if not problems:
+        print("Stopped it." if stopped else "It wasn't running.")
 
 
 def main(cfg, args, workdir: Path) -> None:
     if getattr(args, "install", False):
         return install(cfg, workdir, args.config)
     if getattr(args, "uninstall", False):
-        return uninstall(workdir)
+        return uninstall(cfg, workdir)
     if getattr(args, "stop", False):
-        print("Stopped it." if stop_running(workdir) else "It wasn't running (no logs\\site.pid).")
+        stopped, problems = stop_running(workdir, cfg.site_port)
+        for p in problems:
+            print("Couldn't stop it: " + p)
+        if not problems:
+            print(f"Stopped it (process {', '.join(map(str, stopped))})." if stopped else "It wasn't running.")
         return
     serve(cfg, workdir)

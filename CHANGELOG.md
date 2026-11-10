@@ -4,6 +4,18 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.31.2 - 2026-11-10
+
+- **`site --install` replaces the running results site for sure.** It used to stop only the copy named in
+  logs/site.pid; when that file was missing or out of date (a copy started at logon or by Task Scheduler, or
+  an earlier install), the old version kept the port and kept serving, and the new copy waited for the port
+  forever. Now it finds every copy of the site (any Python running `swingbot site`, and whatever holds the
+  port), stops them, and says which version is now running. If it can't stop one (access denied: started as
+  administrator or by Task Scheduler), it says so and how to end it, instead of starting a copy that can't
+  get the port. `site --stop` and `--uninstall` do the same.
+- A second copy of the site that finds the site already running on its port now stops (and says how to
+  replace the running one) instead of retrying in the background.
+
 ## v1.31.1 - 2026-11-10
 
 - The status at the top right of the dashboard names the stock the trade is in ("In a GS trade - stop
