@@ -65,6 +65,11 @@ jobs:
           if [ "${{ github.event_name }}" != "push" ]; then
             [ -n "$DO_TOKEN" ] && [ -n "$REPO" ] && do_on=true
             [ -n "$HUB_TOKEN" ] && [ -n "$HUB_REPO" ] && hub_on=true
+            # one half of a registry set up: say so rather than skip it silently
+            if [ -n "$REPO" ] && [ -z "$DO_TOKEN" ]; then
+              echo "::warning::DOCR_REPOSITORY is set but the secret DIGITALOCEAN_ACCESS_TOKEN is missing or empty: not pushing to DigitalOcean (Settings > Secrets and variables > Actions > Secrets)"; fi
+            if [ -n "$HUB_REPO" ] && [ -z "$HUB_TOKEN" ]; then
+              echo "::warning::DOCKERHUB_REPOSITORY is set but the secret DOCKERHUB_TOKEN is missing or empty: not pushing to Docker Hub"; fi
             if $hub_on; then
               tags="docker.io/$HUB_REPO:v$v,docker.io/$HUB_REPO:latest"
               $do_on && copy=true
