@@ -4,6 +4,11 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.31.1 - 2026-11-10
+
+- The status at the top right of the dashboard names the stock the trade is in ("In a GS trade - stop
+  902.47"). With another watched stock on the chart, the stop shown there could look like that stock's.
+
 ## v1.31.0 - 2026-11-10
 
 - **Trade details on the chart's hover.** Hovering a bar inside a trade (from the entry ▲ along the dashed

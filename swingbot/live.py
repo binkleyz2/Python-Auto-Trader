@@ -1870,7 +1870,7 @@ class Bot:
 
     def _auto_state(self) -> str:
         if self.pos:
-            return (f"In a {'short ' if self._is_short() else ''}trade - stop {self.pos['stop']:.2f}"
+            return (f"In a {'short ' if self._is_short() else ''}{self.symbol} trade - stop {self.pos['stop']:.2f}"
                     + (" (rescan after it closes)" if self.midday_waiting else ""))
         if self.halted:
             return "Loss limit hit - watching only"
