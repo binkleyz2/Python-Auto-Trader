@@ -5,7 +5,8 @@
 # A change to the Docker files alone only builds it, as a check, without pushing.
 #
 # Set up once, in the repo's Settings > Secrets and variables > Actions:
-#   DigitalOcean:  secret DIGITALOCEAN_ACCESS_TOKEN (API token, registry read+write)
+#   DigitalOcean:  secret DIGITALOCEAN_ACCESS_TOKEN (API token: registry read, update and delete - each run
+#                  deletes all but the previous version there and runs garbage collection, to stay in the quota)
 #                  variable DOCR_REPOSITORY  <your-registry>/swingbot   (e.g. zelwyn/swingbot)
 #   Docker Hub:    secret DOCKERHUB_TOKEN (a Docker Hub access token, Read & Write)
 #                  variable DOCKERHUB_REPOSITORY  <your Docker Hub user>/swingbot   (e.g. binkleyz/swingbot)
@@ -142,10 +143,13 @@ jobs:
       - name: Copy to the DigitalOcean registry
         if: steps.v.outputs.copy_to_do == 'true'
         run: |
+          # the free registry holds only a few versions: first delete all but the previous one and free the space
+          DO_TOKEN=$(printf '%s' "$DO_TOKEN" | tr -d '[:space:]') python3 docker/do_cleanup.py \
+            "${{ steps.v.outputs.do_repo }}" "${{ steps.v.outputs.version }}" 1
           src=docker.io/${{ steps.v.outputs.hub_repo }}:v${{ steps.v.outputs.version }}
           dst=registry.digitalocean.com/${{ steps.v.outputs.do_repo }}
           if ! docker buildx imagetools create -t "$dst:v${{ steps.v.outputs.version }}" -t "$dst:latest" "$src"; then
-            echo "::error::Couldn't copy the image to $dst. If it says 'quota exceeded', the registry is full: in DigitalOcean, Container Registry, delete old tags, run garbage collection, then run this workflow again (Docker Hub already has this version)."
+            echo "::error::Couldn't copy the image to $dst. If it says 'quota exceeded', the registry is full: in DigitalOcean, Container Registry, delete old tags or move to a bigger plan, then run this workflow again (Docker Hub already has this version)."
             exit 1
           fi
 

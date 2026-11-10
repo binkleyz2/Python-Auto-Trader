@@ -531,7 +531,8 @@ account, so watch the dry run for a while first. For real orders on your Public 
 The **Docker image** workflow builds it for amd64 and arm64 after each release and pushes
 `registry.digitalocean.com/<your-registry>/swingbot:vX.Y.Z` and `:latest`. To turn it on, in the GitHub repo's
 Settings > Secrets and variables > Actions, add:
-- secret `DIGITALOCEAN_ACCESS_TOKEN`: a DigitalOcean API token with registry read and write,
+- secret `DIGITALOCEAN_ACCESS_TOKEN`: a DigitalOcean API token with registry read, update and delete (custom
+  scopes),
 - variable `DOCR_REPOSITORY`: `<your-registry>/swingbot`.
 
 For **Docker Hub** as well (or instead), add:
@@ -548,6 +549,11 @@ To share a **private** Docker Hub repository: on Docker Hub open the repository,
 Collaborators**, and add the other person's Docker ID. They sign in with their own account
 (`docker login`, ideally with a read-only access token of theirs) and pull `<user>/swingbot` as usual. To stop
 sharing, remove them there. (A repository owned by a Docker Hub organization uses team permissions instead.)
+
+A free (Starter) DigitalOcean registry holds 500 MB, only a few versions of the image. So before each copy
+the workflow deletes every version there except the previous one, then runs garbage collection, which frees
+the space (the registry is read-only for the few minutes that takes). That's why the token needs update and
+delete. With a bigger plan you can raise the number kept: the `1` after `do_cleanup.py` in the workflow.
 
 If you turn on **immutable tags** on Docker Hub, apply them to the version tags only (a rule like `v.*`),
 so each release can still move `latest`. A version that's already published can't then be replaced: a fix to
