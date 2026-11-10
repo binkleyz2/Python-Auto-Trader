@@ -293,6 +293,19 @@ def _excel(write, path: Path) -> bool:
         return False
 
 
+def _bar_size(hist: dict) -> int | None:
+    """The bar size of loaded history, in minutes (the usual gap between bars within a day)."""
+    import pandas as pd
+    for df in hist.values():
+        if df is None or len(df) < 3:
+            continue
+        idx = df.index
+        gaps = pd.Series(idx[1:] - idx[:-1])[pd.Series(idx[1:].date) == pd.Series(idx[:-1].date)]
+        if len(gaps):
+            return max(1, int(round(gaps.mode().iloc[0].total_seconds() / 60)))
+    return None
+
+
 def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None,
              steps: list[str] | None = None, start=None, end=None, quick: bool = False) -> list[Path]:
     """Run the backtest for every combination of the --try values and print them side by side.
@@ -328,6 +341,15 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
             options.append([(key, v) for v in vs])
             print(f"{key}: {', '.join(str(v) for v in vs)}", flush=True)
     combos = list(itertools.product(*options))
+    # bar_minutes: the history was loaded at one size; other sizes are made from it (5-minute bars combine
+    # into 15 or 30), so every combination really runs on its own bar size
+    loaded = _bar_size(hist) or cfg.bar_minutes
+    bar_hist = {loaded: hist}
+    for combo in combos:
+        m = dict(combo).get("bar_minutes", loaded)
+        if m != loaded and (m < loaded or m % loaded):
+            sys.exit(f"--try bar_minutes={m}: the history is {loaded}-minute bars, so only multiples of {loaded} "
+                     f"can be made from it. Load finer bars (--bars 1 or 5), or run that size on its own: --bars {m}")
     if len(combos) > MAX_RUNS:
         sys.exit(f"--try: {len(combos)} combinations - keep it to {MAX_RUNS} or fewer (fewer values, or a bigger step)")
     if len(combos) > 1:
@@ -338,11 +360,10 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
     # result that only came from which stocks happened to be picked shows up as such
     import random
     syms = sorted(hist)
-    halves = None
+    halves, half_caches = None, {}
     if not quick and not forced and len(syms) >= 40:
         random.Random(7).shuffle(syms)
         halves = (set(syms[::2]), set(syms[1::2]))
-        half_cache = ({}, {})
         print(f"Each combination also runs on two random halves of the {len(syms)} stocks, to check it holds up "
               f"(--quick skips this)", flush=True)
     for n, combo in enumerate(combos, 1):
@@ -353,17 +374,24 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
             sys.exit(f"--try {dict(combo)}: {e}")
         label = ", ".join(f"{k}={v if v != '' else 'off'}" for k, v in combo)
         print(f"[{n}/{len(combos)}] {label}", flush=True)
-        pk = (c.swing_n, c.atr_period, c.direction != "long")
+        bm = c.bar_minutes if "bar_minutes" in dict(combo) else loaded
+        if bm not in bar_hist:
+            from .data import resample_bars
+            print(f"  making {bm}-minute bars from the {loaded}-minute history", flush=True)
+            bar_hist[bm] = {k: resample_bars(v, bm) for k, v in hist.items()}
+        h = bar_hist[bm]
+        pk = (bm, c.swing_n, c.atr_period, c.direction != "long")
         if pk not in prepared:
-            prepared[pk] = bt.prepare(hist, c)
-        trades, curve, _ = bt.run(hist, c, scan_cache=scan_cache, prepared=prepared[pk], progress=_progress("days"),
-                                  forced=forced, start=start, end=end)
+            prepared[pk] = bt.prepare(h, c)
+        trades, curve, _ = bt.run(h, c, scan_cache=scan_cache.setdefault(bm, {}), prepared=prepared[pk],
+                                  progress=_progress("days"), forced=forced, start=start, end=end)
         s = bt.summarize(trades, curve, c)
         checks = _periods(trades, curve)
         if halves is not None:
             for i, half in enumerate(halves):
                 sub = {k: v for k, v in prepared[pk].items() if k in half}
-                tr_h, _, _ = bt.run(hist, c, scan_cache=half_cache[i], prepared=sub, start=start, end=end)
+                hc = half_caches.setdefault((bm, i), {})
+                tr_h, _, _ = bt.run(h, c, scan_cache=hc, prepared=sub, start=start, end=end)
                 checks.append(round(float(tr_h["pnl"].sum()), 2) if len(tr_h) else 0.0)
         tag = "-".join(f"{k}{v if v != '' else 'off'}" for k, v in combo).replace(" ", "").replace(":", "")
         trades.to_csv(out / f"trades-{tag}.csv", index=False)

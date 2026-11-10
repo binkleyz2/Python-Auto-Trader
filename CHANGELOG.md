@@ -4,6 +4,13 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.31.3 - 2026-11-10
+
+- **Fixed: `backtest --try bar_minutes=5,15,30` ran every combination on the same bars,** so all of them
+  came out identical. Each one now runs on its own bar size, made from the history that was loaded
+  (5-minute bars combine into 10, 15 or 30). A size that can't be made from it (3 from 5-minute bars, say)
+  is refused, with how to run it instead (`--bars 3`).
+
 ## v1.31.2 - 2026-11-10
 
 - **`site --install` replaces the running results site for sure.** It used to stop only the copy named in

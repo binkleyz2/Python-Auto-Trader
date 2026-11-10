@@ -104,3 +104,21 @@ def test_full_dry_run_day_on_one_minute_bars(tmp_path, monkeypatch):
     assert [dd["back"] for dd in st["days"]] == [3, 2, 1, 0]
     for c_ in bot.closed:
         assert 0 <= c_["entry_x"] <= c_["exit_x"] < 390
+
+
+def test_try_bar_minutes_really_changes_the_bars(tmp_path):
+    """--try bar_minutes used to run every combination on the loaded bars (identical results)."""
+    import pytest
+    from swingbot.__main__ import _bar_size, _compare
+    from swingbot.config import Config
+    from swingbot.data import synthetic
+    cfg = Config(min_avg_dollar_volume=0, direction="both")
+    hist = {s: synthetic(s, days=30, seed=i) for i, s in enumerate(["AAA", "BBB", "CCC", "DDD"])}
+    assert _bar_size(hist) == 5
+    _compare(hist, cfg, ["bar_minutes=5,15,30"], tmp_path, quick=True)
+    import pandas as pd
+    t = {m: pd.read_csv(tmp_path / f"trades-bar_minutes{m}.csv") for m in (5, 15, 30)}
+    assert len({tuple(t[m]["entry_time"]) for m in t}) == 3            # three different sets of trades
+    assert set(t[30]["entry_time"].str[-2:]) <= {"00", "30"}            # 30-minute bars: entries on :00/:30
+    with pytest.raises(SystemExit, match="only multiples of 5"):
+        _compare(hist, cfg, ["bar_minutes=5,3"], tmp_path / "x", quick=True)
