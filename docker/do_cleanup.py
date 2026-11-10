@@ -47,9 +47,7 @@ def usage(registry, when):
               + f" (as of {reg.get('storage_usage_bytes_updated_at', '?')})")
     code, data = call("GET", f"/{registry}/repositoriesV2?per_page=100")
     for r in data.get("repositories") or []:
-        size = (r.get("latest_manifest") or {}).get("compressed_size_bytes")
-        print(f"  repository {r.get('name')}: {r.get('tag_count')} tags, {r.get('manifest_count')} manifests"
-              + (f", newest {size / 1e6:.0f} MB" if size else ""))
+        print(f"  repository {r.get('name')}: {r.get('tag_count')} tags, {r.get('manifest_count')} manifests")
 
 
 def vkey(tag):
