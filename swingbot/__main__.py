@@ -269,7 +269,8 @@ def _archive(files: list[Path], cfg: Config, args, workdir: Path, now=None) -> P
         folder = folder if folder.is_absolute() else workdir / folder
         folder.mkdir(parents=True, exist_ok=True)
         now = now or datetime.now()
-        what = [getattr(args, "symbol", None) or getattr(args, "universe", None) or "csv"]
+        what = ([f"{cfg.momentum_symbol}-momentum"] if cfg.strategy == "spy_momentum" else
+                [getattr(args, "symbol", None) or getattr(args, "universe", None) or "csv"])
         if getattr(args, "days", None):
             what.append(f"{args.days}d")
         what += [t.replace(" ", "") for t in getattr(args, "tries", []) or []]

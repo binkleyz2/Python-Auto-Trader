@@ -4,6 +4,11 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.33.1 - 2026-11-10
+
+- spy_momentum backtest results are saved as `...-SPY-momentum-...zip` (or QQQ...), not under the
+  `--universe` name (which they don't use).
+
 ## v1.33.0 - 2026-11-10
 
 - **New strategy: SPY intraday momentum** (`strategy: spy_momentum`), from Zarattini, Aziz & Barbon (2024).
