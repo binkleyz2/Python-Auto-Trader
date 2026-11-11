@@ -92,11 +92,21 @@ class AlpacaBot(Bot):
         from alpaca.data.enums import DataFeed
         return DataFeed.SIP if (sip or self.client.feed == "sip") else DataFeed.IEX
 
+    def _public_data_client(self):
+        return self.client.public
+
     def momentum_bars(self, symbol: str, days: int) -> pd.DataFrame:
-        """spy_momentum's history: enough earlier days of bars at the bot's bar size."""
+        """spy_momentum's history: enough earlier days of bars. With Public's price data, from Public if it
+        has enough; otherwise (or without it) from Alpaca, at the bot's bar size."""
         if self.client.public is not None:
-            return Bot.momentum_bars(self, symbol, days)
-        return self._one(self._bars_df(symbol, "DAYS", back=int(days * 1.6) + 10), symbol)
+            try:
+                df = Bot.momentum_bars(self, symbol, days)
+                if df is not None and len(set(df.index.date)) >= days:
+                    return df
+            except Exception as e:
+                log.warning("%s history from Public failed (%s) - using Alpaca's", symbol, e)
+        df = self._one(self._bars_df(symbol, "DAYS", back=int(days * 1.6) + 10), symbol)
+        return df[df.index.date < now_et().date()] if len(df) else df
 
     def _bars_df(self, symbols, period: str, back: int | None = None) -> pd.DataFrame:
         from alpaca.data.enums import Adjustment

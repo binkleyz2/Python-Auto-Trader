@@ -33,7 +33,7 @@ import pandas as pd
 from . import __version__
 from .backtest import position_size
 from .config import Config
-from .data import fetch_public, normalize
+from .data import fetch_public, file_stem, normalize
 from .scanner import avg_dollar_volume, one_per_company, scan
 from .strategy import (add_indicators, better_stop, find_swings, mirror, resistance_line, sided_breakeven_stop,
                        sided_trailing_stop, signals_at, support_line, target_for)
@@ -249,24 +249,60 @@ class Bot:
     def momentum(self) -> bool:
         return self.cfg.strategy == "spy_momentum"
 
+    def _public_data_client(self):
+        """The client that serves Public's price data (the Alpaca bot keeps it apart from its own)."""
+        return self.client
+
     def momentum_bars(self, symbol: str, days: int) -> pd.DataFrame:
-        """Bars from enough earlier days for the noise band (Public: a month or a quarter of bars on the
-        check clock - the sizes it offers for that long)."""
+        """Bars from at least ``days`` earlier days for the noise band. From Public: a month (or a quarter)
+        of bars on the check clock, the sizes it offers for that long. Every day's bars are also kept in
+        data/momentum/, so the history builds up even if Public only gives a short stretch."""
         from .data import PUBLIC_SIZES, fetch_public
         period = "MONTH" if days <= 18 else "QUARTER"
         every = int(self.cfg.momentum_check_minutes)
         sizes = [m for m in (30, 15, 10, 5) if m in PUBLIC_SIZES and every % m == 0]
-        last = None
+        got, problems = None, []
         for m in sizes:
             try:
-                df = fetch_public(self.client, symbol, period, m)
-                if df is not None and len(set(df.index.date)) >= days:
-                    return df
+                df = fetch_public(self._public_data_client(), symbol, period, m)
             except Exception as e:
-                last = e
-        if last:
-            log.warning("%s history for the noise band: %s", symbol, last)
-        return fetch_public(self.client, symbol, period, sizes[-1]) if sizes else pd.DataFrame()
+                problems.append(f"{m}-minute bars: {e}")
+                continue
+            if df is not None and len(df) and (got is None or len(set(df.index.date)) > len(set(got.index.date))):
+                got = df
+            if got is not None and len(set(got.index.date)) >= days:
+                break
+        if problems and (got is None or len(set(got.index.date)) < days):
+            log.warning("%s history from Public for the noise band: %s", symbol, "; ".join(problems))
+        return self._momentum_cache(symbol, got)
+
+    def _momentum_cache(self, symbol: str, df: pd.DataFrame | None) -> pd.DataFrame:
+        """Merge with (and update) data/momentum/<symbol>.csv: completed days only, newest bars win."""
+        from .data import normalize
+        path = self.workdir / "data" / "momentum" / f"{file_stem(symbol)}.csv"
+        old = None
+        try:
+            if path.exists():
+                old = pd.read_csv(path, index_col=0)
+                old.index = pd.to_datetime(old.index, utc=True).tz_convert("America/New_York")
+        except Exception as e:
+            log.debug("momentum cache %s unreadable: %s", path, e)
+        today = now_et().date()
+        fresh = df[df.index.date < today] if df is not None and len(df) else None
+        if fresh is not None and old is not None and len(old):
+            fresh_days = set(fresh.index.date)       # a day fetched again replaces the kept one (one bar size a day)
+            old = old[[d not in fresh_days for d in old.index.date]]
+        parts = [x for x in (old, fresh) if x is not None and len(x)]
+        if not parts:
+            return pd.DataFrame()
+        both = pd.concat(parts).sort_index()
+        both = both[~both.index.duplicated(keep="last")]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            both.tail(120 * 78).to_csv(path)                  # about the last 120 days
+        except OSError as e:
+            log.debug("momentum cache %s not saved: %s", path, e)
+        return normalize(both)
 
     def _momentum_morning(self, today) -> None:
         from . import momentum as mm
@@ -288,6 +324,9 @@ class Bot:
         except Exception as e:
             log.warning("%s history for the noise band failed: %s", sym, e, extra={"notify": "alert"})
         have = len(self._mom.days) if self._mom else 0
+        if have:
+            log.info("Noise band history: %d earlier days of %s bars (%s to %s)", have, sym,
+                     self._mom.days[0], self._mom.days[-1])
         if have < n + 1:
             log.warning("spy_momentum: only %d earlier days of %s bars (needs %d) - no trades today",
                         have, sym, n + 1, extra={"notify": "alert"})

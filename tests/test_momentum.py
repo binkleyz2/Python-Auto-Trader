@@ -152,3 +152,70 @@ def test_config():
         Config(strategy="moon").validate()
     with pytest.raises(ValueError, match="momentum_check_minutes"):
         Config(momentum_check_minutes=7).validate()
+
+
+def _alpaca_bot(tmp_path, public, monkeypatch, now):
+    from types import SimpleNamespace
+    from swingbot import alpaca_live
+    bot = alpaca_live.AlpacaBot.__new__(alpaca_live.AlpacaBot)
+    bot.cfg, bot.workdir, bot.bm = Config(strategy="spy_momentum", broker="alpaca", price_data="public"), tmp_path, 5
+    bot.client = SimpleNamespace(public=public, data=None)
+    monkeypatch.setattr(live, "now_et", lambda: now)
+    monkeypatch.setattr(alpaca_live, "now_et", lambda: now)
+    return bot
+
+
+def test_alpaca_with_public_data_gets_history_from_public(tmp_path, monkeypatch):
+    """The bug: with price_data public the Alpaca bot asked the Alpaca connection for Public's bars."""
+    df = synthetic("QQQ", days=30, seed=2)
+    last = sorted(set(df.index.date))[-1]
+    now = datetime(last.year, last.month, last.day, 9, 0, tzinfo=ET)
+    pub = FakeClient(df)
+    pub.now = now
+    bot = _alpaca_bot(tmp_path, pub, monkeypatch, now)
+    bot._bars_df = lambda *a, **k: (_ for _ in ()).throw(AssertionError("Public had enough: no Alpaca request"))
+    h = bot.momentum_bars("QQQ", 16)
+    assert len(set(h.index.date)) >= 16 and max(h.index.date) < last          # earlier days only
+    assert (tmp_path / "data" / "momentum" / "QQQ.csv").exists()
+
+
+def test_alpaca_falls_back_to_its_own_data(tmp_path, monkeypatch):
+    df = synthetic("QQQ", days=30, seed=2)
+    days = sorted(set(df.index.date))
+    now = datetime(days[-1].year, days[-1].month, days[-1].day, 9, 0, tzinfo=ET)
+    pub = FakeClient(df[df.index.date >= days[-4]])                             # Public: only 3 earlier days
+    pub.now = now
+    bot = _alpaca_bot(tmp_path, pub, monkeypatch, now)
+    asked = []
+    bot._bars_df = lambda sym, period, back=None: asked.append(back) or df
+    h = bot.momentum_bars("QQQ", 16)
+    assert asked and asked[0] >= 16 and len(set(h.index.date)) >= 16 and max(h.index.date) < days[-1]
+
+
+def test_public_history_builds_up_day_by_day(tmp_path, monkeypatch):
+    """Public bot: each morning's bars are kept, so a short history from Public still adds up."""
+    df = synthetic("QQQ", days=30, seed=2)
+    days = sorted(set(df.index.date))
+    bot = live.Bot.__new__(live.Bot)
+    bot.cfg, bot.workdir, bot.bm = Config(strategy="spy_momentum", momentum_symbol="QQQ"), tmp_path, 5
+    for k in range(10, 30):                                                    # 20 mornings, a week of bars each
+        d = days[k]
+        now = datetime(d.year, d.month, d.day, 9, 0, tzinfo=ET)
+        monkeypatch.setattr(live, "now_et", lambda now=now: now)
+        bot.client = FakeClient(df[(df.index.date >= days[k - 5]) & (df.index.date < d)])
+        bot.client.now = now
+        h = bot.momentum_bars("QQQ", 16)
+    assert len(set(h.index.date)) == 24                                        # days[5] .. days[28]
+
+
+def test_live_spy_momentum_with_no_history_doesnt_trade(tmp_path, monkeypatch, caplog):
+    cfg = Config(strategy="spy_momentum")
+    df = synthetic("SPY", days=3, seed=1)
+    day = sorted(set(df.index.date))[-1]
+    client = FakeClient(df)
+    bot = live.Bot(client, cfg, live=False, workdir=tmp_path)
+    now = datetime(day.year, day.month, day.day, 9, 0, tzinfo=ET)
+    monkeypatch.setattr(live, "now_et", lambda: now)
+    client.now = now
+    bot.morning_scan()
+    assert "not enough history" in bot.pick_reason and bot._mom is not None and len(bot._mom.days) < 15

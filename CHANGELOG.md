@@ -4,6 +4,15 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.33.2 - 2026-11-10
+
+- **Fixed: spy_momentum on Alpaca with Public's price data (`price_data: public`) found no history** ("'AlpacaClients'
+  object has no attribute 'get_bars'", "only 0 earlier days ... no trades today"): it asked the Alpaca
+  connection for Public's bars. It now asks Public, and if Public doesn't give enough days, gets them from
+  Alpaca's own data instead.
+- The noise band's history is also kept in data/momentum/<symbol>.csv and added to each morning, so on Public
+  it builds up even when Public only gives a short stretch. The log says how many earlier days it has.
+
 ## v1.33.1 - 2026-11-10
 
 - spy_momentum backtest results are saved as `...-SPY-momentum-...zip` (or QQQ...), not under the
