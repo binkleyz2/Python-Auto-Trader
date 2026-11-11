@@ -4,6 +4,19 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.32.0 - 2026-11-10
+
+- **Trend filter** (`trend_filter`: off, stock, market or both; `trend_days` 20; `trend_market_symbol` SPY):
+  trade only in the direction of the daily trend - long when it's up, short when it's down. The trend is up
+  when yesterday's close is above its average of the last `trend_days` closes. `stock` uses the stock's own
+  trend, `market` SPY's, `both` needs them to agree. With it on, the scan watches only setups that go with
+  the trend and signals against it aren't taken ("SIGNAL ... not taken: against the trend" in the log). Off by
+  default, so nothing changes until you turn it on. Works live (Public and Alpaca) and in backtests:
+  `py -m swingbot backtest --days 180 --universe watchlist --try trend_filter=off,stock,market,both` (daily
+  closes from Alpaca, from early enough that the first day has a trend). On the dashboard's settings panel.
+- Fixed: `--try` with the word `off` for a setting that isn't a time (like `trend_filter=off`) was turned into
+  a blank; `off` now means blank only for times (`midday_rescan_time=off`).
+
 ## v1.31.3 - 2026-11-10
 
 - **Fixed: `backtest --try bar_minutes=5,15,30` ran every combination on the same bars,** so all of them

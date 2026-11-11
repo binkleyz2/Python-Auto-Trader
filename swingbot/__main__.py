@@ -118,6 +118,46 @@ def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
     return hist
 
 
+def _trend_closes(cfg: Config, args, hist: dict, workdir: Path) -> dict | None:
+    """Daily closes for the trend filter, when this run uses it (trend_filter on, or tried with --try):
+    the stocks' and the market's, from far enough back that the first day already has a trend. From Alpaca
+    for --days runs; otherwise the stocks' own bars, and <market>.csv in the data folder if it's there."""
+    tries = " ".join(getattr(args, "tries", []) or [])
+    if str(cfg.trend_filter) == "off" and "trend_" not in tries:
+        return None
+    mkt = str(cfg.trend_market_symbol or "SPY").upper()
+    m = re.search(r"trend_market_symbol=([\w.,/-]+)", tries)
+    markets = [mkt] + ([x.strip().upper() for x in m.group(1).split(",") if x.strip()] if m else [])
+    m = re.search(r"trend_days=([\d.,:-]+)", tries)
+    most = max([int(cfg.trend_days)] + ([int(float(x)) for x in re.findall(r"\d+(?:\.\d+)?", m.group(1))] if m else []))
+    if getattr(args, "days", None) and getattr(args, "command", "") == "backtest":
+        from datetime import datetime, timedelta
+        from .history_data import daily_closes
+        first = min(df.index[0] for df in hist.values() if len(df))
+        start = first.to_pydatetime() - timedelta(days=int(most * 1.6) + 15)
+        try:
+            out = daily_closes(_data_client(), sorted(set(hist) | set(markets)), start)
+        except Exception as e:
+            print(f"Couldn't get daily closes for the trend filter ({e}) - using the stocks' own bars, no market trend",
+                  flush=True)
+            return {}
+        missing = [x for x in markets if x not in out]
+        print(f"Trend filter: daily closes for {len(out)} symbols from {start:%Y-%m-%d}"
+              + (f" (nothing for {', '.join(missing)})" if missing else ""), flush=True)
+        return out
+    from .data import load_dir
+    out = {}
+    for x in markets:
+        got = load_dir(args.data, [x]) if getattr(args, "data", None) else {}
+        if x in got:
+            from .trend import daily_closes as dc
+            out[x] = dc(got[x])
+    if not out:
+        print(f"Trend filter: no {mkt} history here, so the market trend is unknown (only the stock trend works). "
+              f"Backtest with --days to get it from Alpaca.", flush=True)
+    return out
+
+
 MAX_RUNS = 64
 _RANGE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*(?:[:/]\s*(\d+(?:\.\d+)?))?\s*$")
 
@@ -307,7 +347,8 @@ def _bar_size(hist: dict) -> int | None:
 
 
 def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[str] | None = None,
-             steps: list[str] | None = None, start=None, end=None, quick: bool = False) -> list[Path]:
+             steps: list[str] | None = None, start=None, end=None, quick: bool = False,
+             daily: dict | None = None) -> list[Path]:
     """Run the backtest for every combination of the --try values and print them side by side.
     Returns the files it wrote."""
     import dataclasses
@@ -325,7 +366,8 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
             sys.exit(f"--try: unknown setting {key!r}")
         if isinstance(getattr(cfg, key), str):          # times stay text ("12:45" isn't a number); off = ""
             vs = [v.strip().strip("\"'") for v in vals.split(",")]
-            options.append([(key, "" if v.lower() in ("off", "none") else v) for v in vs if v or len(vs) == 1])
+            timeish = ":" in str(getattr(cfg, key)) or key.endswith("_time")   # times: off = "" (blank)
+            options.append([(key, "" if timeish and v.lower() in ("off", "none") else v) for v in vs if v or len(vs) == 1])
         else:
             step = each.get(key)
             if step is None and every is not None and not (_whole(cfg, key) and "." in every):
@@ -384,14 +426,14 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         if pk not in prepared:
             prepared[pk] = bt.prepare(h, c)
         trades, curve, _ = bt.run(h, c, scan_cache=scan_cache.setdefault(bm, {}), prepared=prepared[pk],
-                                  progress=_progress("days"), forced=forced, start=start, end=end)
+                                  progress=_progress("days"), forced=forced, start=start, end=end, daily=daily)
         s = bt.summarize(trades, curve, c)
         checks = _periods(trades, curve)
         if halves is not None:
             for i, half in enumerate(halves):
                 sub = {k: v for k, v in prepared[pk].items() if k in half}
                 hc = half_caches.setdefault((bm, i), {})
-                tr_h, _, _ = bt.run(h, c, scan_cache=hc, prepared=sub, start=start, end=end)
+                tr_h, _, _ = bt.run(h, c, scan_cache=hc, prepared=sub, start=start, end=end, daily=daily)
                 checks.append(round(float(tr_h["pnl"].sum()), 2) if len(tr_h) else 0.0)
         tag = "-".join(f"{k}{v if v != '' else 'off'}" for k, v in combo).replace(" ", "").replace(":", "")
         trades.to_csv(out / f"trades-{tag}.csv", index=False)
@@ -642,13 +684,16 @@ def main(argv=None) -> None:
                 sys.exit(f"No CSVs for the watchlist found in {args.data}/ (or use --days 120 for Alpaca's history)")
         if args.steps and not args.tries:
             sys.exit("--step goes with --try, e.g. --try breakeven_at_r=1-2 --step 0.5")
+        daily = _trend_closes(cfg, args, hist, workdir)
         if args.tries:
-            files = _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps, start, end, args.quick)
+            files = _compare(hist, cfg, args.tries, Path(args.out), _forced(args), args.steps, start, end, args.quick,
+                             daily=daily)
             if args.command == "backtest" and (kept := _archive(files, cfg, args, workdir)):
                 print(f"Saved as {kept}")
             return
         print(f"Backtesting {len(hist)} stocks...", flush=True)
-        trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args), start=start, end=end)
+        trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args), start=start, end=end,
+                                      daily=daily)
         out = Path(args.out)
         out.mkdir(exist_ok=True)
         trades.to_csv(out / "trades.csv", index=False)

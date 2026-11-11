@@ -16,6 +16,7 @@ import pandas as pd
 
 from .config import Config
 from .scanner import avg_dollar_volume, one_per_company, scan
+from .trend import DayTrend, setup_side
 from .strategy import (add_indicators, better_stop, cols, find_swings, mirror, sided_breakeven_stop, sided_trailing_stop,
                        signals_at, target_for)
 
@@ -56,13 +57,14 @@ def position_size(equity: float, entry: float, stop: float, cfg: Config, side: i
 
 
 # --------------------------------------------------------------------------------- one session
-def simulate_watch(sessions: list[tuple], equity: float, cfg: Config, rescan=None) -> list[Trade]:
+def simulate_watch(sessions: list[tuple], equity: float, cfg: Config, rescan=None, allow=None) -> list[Trade]:
     """Trade one session over several watched symbols, best-ranked first.
     ``sessions`` = [(symbol, d, is_low, is_high, md, day_idx), ...] where ``day_idx`` are the positions of
     today's bars in ``d`` (d has the earlier days too, so lines and swings can reach back).
     ``rescan(ts)`` = the midday rescan: new sessions ranked on the bars before ``ts`` (None = keep the
     morning list). Like the live bot it runs once, at ``midday_rescan_time``, or after an open trade closes
-    if that is before ``midday_rescan_by``; not after the trade or loss limit."""
+    if that is before ``midday_rescan_by``; not after the trade or loss limit.
+    ``allow(symbol, side)`` = False for a signal the trend filter rules out (None = no filter)."""
     first_entry, last_entry, flatten = _t(cfg.first_entry_time), _t(cfg.last_entry_time), _t(cfg.flatten_time)
     slip = cfg.slippage_pct / 100
     trades: list[Trade] = []
@@ -172,6 +174,8 @@ def simulate_watch(sessions: list[tuple], equity: float, cfg: Config, rescan=Non
                 if ts not in at[sym]:
                     continue
                 sig = signals_at(d, md, at[sym][ts], cfg, lo, hi)
+                if sig and allow is not None and not allow(sym, sig.side):
+                    continue                              # against the trend: not traded
                 if sig:
                     state["pending"] = (sym, sig)
                     break
@@ -211,11 +215,14 @@ def prepare(history: dict[str, pd.DataFrame], cfg: Config) -> dict:
 
 def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, warmup_days: int = 3,
         progress=None, scan_cache: dict | None = None, prepared: dict | None = None,
-        forced: list[str] | None = None, start=None, end=None) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
+        forced: list[str] | None = None, start=None, end=None,
+        daily: dict | None = None) -> tuple[pd.DataFrame, pd.Series, list[dict]]:
     """Returns (trades, end-of-day equity curve, daily scan log). ``scan_cache`` lets several runs with
     settings that don't change the scan (stops, targets, trades per day...) share the daily rankings.
     ``forced`` = watch these symbols every day without a scan or a midday rescan (live: run --symbol).
-    ``start``/``end`` (dates): trade only on those days; earlier days still give the lines their history."""
+    ``start``/``end`` (dates): trade only on those days; earlier days still give the lines their history.
+    ``daily`` = {symbol: daily closes} for ``trend_filter`` (the market's too); symbols missing from it get
+    their trend from their own bars."""
     prepared = prepared if prepared is not None else prepare(history, cfg)
     all_days = sorted(set().union(*[set(p[3]) for p in prepared.values()])) if prepared else []
     equity = cfg.starting_equity
@@ -250,6 +257,9 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
             ranked = [(r.symbol, r.score, r.setup, r.detail) for r in scan(prior, cfg, pre=pre) if r.score > 0]
             if scan_cache is not None:
                 scan_cache[ck] = ranked
+        trend = DayTrend(cfg, day, daily, bars=prepared)
+        if trend.on and not forced:
+            ranked = [w for w in ranked if trend.ok(w[0], setup_side(w[2]))]    # setups that go with the trend
         watched = one_per_company(ranked, max(1, int(cfg.watch_count)), key=lambda w: w[0], extra=cfg.same_company)
         picks.append({"date": str(day), "symbol": watched[0][0] if watched else None,
                       "setup": watched[0][2] if watched else "none", "detail": watched[0][3] if watched else "",
@@ -264,7 +274,7 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
                     out.append((sym, d, lo, hi, md, day_idx))
             return out
 
-        def midday(ts, day=day, window_start=window_start, pick=picks[-1]):
+        def midday(ts, day=day, window_start=window_start, pick=picks[-1], trend=trend):
             """The live midday rescan: the same window as the morning plus today's bars before ``ts``; the
             volume screen uses full days only, as live."""
             ck2 = (key, day, ts.time())
@@ -285,6 +295,8 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
                            for r in scan(prior, cfg, dollar_volume=dv, pre=pre) if r.score > 0]
                 if scan_cache is not None:
                     scan_cache[ck2] = ranked2
+            if trend.on:
+                ranked2 = [w for w in ranked2 if trend.ok(w[0], setup_side(w[2]))]
             if not ranked2:
                 return None                               # no setups: keep the morning list (as live)
             new = [w[0] for w in one_per_company(ranked2, max(1, int(cfg.watch_count)), key=lambda w: w[0],
@@ -293,7 +305,7 @@ def run(history: dict[str, pd.DataFrame], cfg: Config, lookback_days: int = 10, 
             return sessions_for(new)
 
         for tr in simulate_watch(sessions_for([w[0] for w in watched]), equity, cfg,
-                                 rescan=None if forced else midday):
+                                 rescan=None if forced else midday, allow=trend.ok if trend.on else None):
             equity += tr.pnl
             trades.append(tr)
         curve[pd.Timestamp(day)] = equity

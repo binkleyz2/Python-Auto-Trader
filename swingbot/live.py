@@ -242,6 +242,57 @@ class Bot:
 
     tradable_note = "at Public"
 
+    # ------------------------------------------------- the daily trend filter (trend_filter)
+    def day_trend(self):
+        """Today's trend filter (see trend.py); daily closes are fetched as they're needed, once a day."""
+        from .trend import DayTrend, WORD, needs_market
+        today = now_et().date()
+        tr = getattr(self, "_trend", None)
+        if tr is None or tr.day != today or tr.mode != str(self.cfg.trend_filter):
+            tr = self._trend = DayTrend(self.cfg, today, {}, fetch=self._trend_closes)
+            if tr.on and needs_market(tr.mode):
+                log.info("Trend filter (%s): market %s trend %s", tr.mode, tr.market_symbol, WORD[tr.market]
+                         + ("" if tr.market is not None else " - no daily history; the market part isn't applied"))
+        return tr
+
+    def _trend_closes(self, symbols: list[str]) -> dict:
+        try:
+            return self.daily_closes(symbols, int(self.cfg.trend_days))
+        except Exception as e:
+            log.warning("Daily closes for the trend filter failed (%s); those stocks' trend is unknown", e)
+            return {}
+
+    def daily_closes(self, symbols: list[str], days: int) -> dict:
+        """{symbol: daily closes indexed by date} for the trend filter (Public: one request per symbol)."""
+        from .data import fetch_public_daily
+        out = {}
+        for sym in symbols:
+            try:
+                c = fetch_public_daily(self.client, sym, days)
+                if len(c):
+                    out[sym] = c
+            except Exception as e:
+                log.warning("daily closes for %s failed: %s", sym, e)
+        return out
+
+    def _with_trend(self, cands: list, n: int) -> list:
+        """The scan's setups that go with the trend, best first (all of them when trend_filter is off).
+        Only as many are checked as the watch list needs (each check may cost a request)."""
+        tr = self.day_trend()
+        if not tr.on:
+            return cands
+        tr.prefetch([r.symbol for r in cands[:3 * n + 10]])
+        kept, out = [], []
+        for r in cands:
+            if len(kept) >= 2 * n + 5:                     # plenty, even after same-company drops
+                break
+            (kept if tr.ok(r.symbol, r.side) else out).append(r)
+        if out:
+            log.info("Trend filter (%s): left out %d setup(s) against the trend: %s", tr.mode, len(out),
+                     ", ".join(f"{r.symbol} ({'short' if r.side < 0 else 'long'}; {tr.note(r.symbol)})"
+                               for r in out[:12]) + (" ..." if len(out) > 12 else ""))
+        return kept
+
     def tradable_symbols(self) -> set[str] | None:
         """Every stock symbol the broker lets you buy and sell now (None = no check)."""
         return public_tradable(self.client)
@@ -251,8 +302,9 @@ class Bot:
         for r in self.scan_results[:25]:                             # best 25 (the log stays readable)
             log.info("scan %-6s score=%.2f %-16s %s", r.symbol, r.score, r.setup, r.detail)
         skipped: list = []
-        good = one_per_company([r for r in self.scan_results if r.score > 0], max(1, int(self.cfg.watch_count)),
-                               key=lambda r: r.symbol, extra=self.cfg.same_company, skipped=skipped)
+        n = max(1, int(self.cfg.watch_count))
+        cands = self._with_trend([r for r in self.scan_results if r.score > 0], n)
+        good = one_per_company(cands, n, key=lambda r: r.symbol, extra=self.cfg.same_company, skipped=skipped)
         for sym, kept in skipped:
             log.info("Not watching %s: same company as %s, which ranked higher - the next stock is watched instead",
                      sym, kept)
@@ -422,6 +474,11 @@ class Bot:
                 dict(label="Daily loss limit", text=f"{c.daily_loss_limit_pct:g}% (no new entries after)"),
                 dict(label="Trades per day", text=f"{c.max_trades_per_day}"),
                 dict(label="Direction", text=direction),
+                dict(label="Trend filter", text={"off": "off - every signal is traded",
+                                                 "stock": f"with the stock's {c.trend_days}-day trend",
+                                                 "market": f"with the market's ({c.trend_market_symbol}) {c.trend_days}-day trend",
+                                                 "both": f"with the stock's and the market's ({c.trend_market_symbol}) "
+                                                         f"{c.trend_days}-day trends"}.get(str(c.trend_filter), str(c.trend_filter))),
                 dict(label="Largest position", text=f"{c.max_position_pct:g}% of the account"),
                 dict(label="Cash", text=cash)]),
             dict(group="Stops", items=[
@@ -1666,6 +1723,11 @@ class Bot:
                 continue                                         # no trade in this symbol this bar
             sig = signals_at(d, md, len(d) - 1, cfg, lo, hi)
             if not sig:
+                continue
+            tr = self.day_trend()
+            if not tr.ok(sym, sig.side):
+                log.info("SIGNAL %s on %s bar %s not taken: against the trend (%s)",
+                         sig.kind, sym, newest.strftime("%H:%M"), tr.note(sym))
                 continue
             log.info("SIGNAL %s on %s bar %s: line %.2f, stop %.2f",
                      sig.kind, sym, newest.strftime("%H:%M"), sig.line_value, sig.stop)

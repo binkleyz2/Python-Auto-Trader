@@ -207,6 +207,25 @@ def resample_bars(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     return normalize(pd.concat(out)) if out else empty_bars()
 
 
+def fetch_public_daily(client, symbol: str, days: int = 20) -> pd.Series:
+    """Daily closes (indexed by ET date) from Public, enough for an average of ``days`` (the trend filter)."""
+    from public_api_sdk import BarAggregation, BarPeriod, TradingSessionToggle
+    period = "QUARTER" if days <= 55 else "HALF_YEAR" if days <= 115 else "YEAR"
+    resp = _public_call(client, lambda: client.get_bars(
+        symbol, BarPeriod[period], aggregation=BarAggregation.ONE_DAY,
+        trading_session_toggle=TradingSessionToggle.REGULAR_HOURS))
+    bars = getattr(getattr(resp, "regular_market", None), "bars", None) or []
+    out = {}
+    for b in bars:
+        ts = pd.Timestamp(b.timestamp)
+        if ts.tzinfo is None or (ts.hour, ts.minute) == (0, 0):
+            day = ts.date()                     # a date stamped at midnight: that day (not the evening before in ET)
+        else:
+            day = ts.tz_convert(ET).date()
+        out[day] = float(b.close)
+    return pd.Series(out, dtype=float).sort_index()
+
+
 def fetch_public_bars(client, symbol: str, period: str = "WEEK", minutes: int = 5) -> pd.DataFrame:
     """Public bars for the bot: 5, 10, 15 or 30 minutes (the sizes with a week of history)."""
     if minutes not in PUBLIC_SIZES:

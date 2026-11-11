@@ -132,3 +132,39 @@ def load_history(data_client, symbols: list[str], days: int, folder: Path, minut
                 progress(done, todo)
     cut = pd.Timestamp(start_all)
     return {s: df[df.index >= cut] for s, df in have.items() if len(df)}
+
+
+def daily_closes(data_client, symbols: list[str], start: datetime, end: datetime | None = None) -> dict:
+    """Daily closes per symbol from Alpaca (split- and dividend-adjusted, like the intraday history), for
+    the trend filter. {symbol: Series indexed by date}; symbols Alpaca has nothing for are left out."""
+    from alpaca.data.enums import Adjustment, DataFeed
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    end = end or (datetime.now(ET) - timedelta(minutes=16))
+    out = {}
+    for i in range(0, len(symbols), 200):
+        part = symbols[i:i + 200]
+        for attempt in range(5):
+            try:
+                df = data_client.get_stock_bars(StockBarsRequest(
+                    symbol_or_symbols=part, timeframe=TimeFrame.Day, start=start.astimezone(UTC),
+                    end=end.astimezone(UTC), feed=DataFeed.SIP, adjustment=Adjustment.ALL)).df
+                break
+            except Exception as e:
+                msg = str(e)
+                if "429" in msg or "too many" in msg.lower() or "timed out" in msg.lower():
+                    _time.sleep(10 * (attempt + 1))
+                    continue
+                raise
+        else:
+            raise RuntimeError("Alpaca kept refusing (rate limit)")
+        if df is None or df.empty:
+            continue
+        for sym in part:
+            try:
+                d = df.xs(sym, level=0)
+            except KeyError:
+                continue
+            idx = pd.DatetimeIndex(d.index).tz_convert(ET)
+            out[sym] = pd.Series(d["close"].to_numpy(dtype=float), index=idx.date).sort_index()
+    return out

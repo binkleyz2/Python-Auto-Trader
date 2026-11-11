@@ -147,6 +147,33 @@ class AlpacaBot(Bot):
             list(ex.map(run, chunks))
         return {s: got[s] for s in symbols if s in got}
 
+    def daily_closes(self, symbols: list[str], days: int) -> dict:
+        """Daily closes for the trend filter: many symbols per request (Public's data: one at a time)."""
+        if self.client.public is not None:
+            from .data import fetch_public_daily
+            return {s: c for s in symbols if len(c := fetch_public_daily(self.client.public, s, days))}
+        from alpaca.data.enums import Adjustment
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        now = now_et()
+        out = {}
+        for i in range(0, len(symbols), 200):
+            df = self.client.data.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=symbols[i:i + 200], timeframe=TimeFrame.Day,
+                start=(now - timedelta(days=int(days * 1.6) + 15)).astimezone(UTC),
+                end=(now - timedelta(minutes=16)).astimezone(UTC),   # free plan: full-market data must be 15+ min old
+                feed=self._feed(sip=True), adjustment=Adjustment.SPLIT)).df
+            if df is None or df.empty:
+                continue
+            for sym in symbols[i:i + 200]:
+                try:
+                    d = df.xs(sym, level=0)
+                except KeyError:
+                    continue
+                idx = pd.DatetimeIndex(d.index).tz_convert("America/New_York")
+                out[sym] = pd.Series(d["close"].to_numpy(dtype=float), index=idx.date).sort_index()
+        return out
+
     def liquidity(self, symbols: list[str]) -> dict | None:
         """Full-market average daily dollar volume (last 5 sessions). Only needed on the free IEX feed,
         whose volume is a small slice of the real total."""

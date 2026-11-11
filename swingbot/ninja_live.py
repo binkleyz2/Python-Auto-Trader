@@ -434,6 +434,9 @@ class NinjaBot(Bot):
     def liquidity(self, symbols):
         return None                                     # volume filter is off for futures (scan_cfg)
 
+    def daily_closes(self, symbols, days):
+        return {}                                       # no daily history for futures: the trend filter has no effect
+
     def _last_trade_price(self) -> float | None:
         # one market-data connection at most every 60 s (bars already give a price every 5 minutes)
         now = _time.monotonic()

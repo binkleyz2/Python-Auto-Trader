@@ -53,6 +53,10 @@ class Config:
     direction: str = "long"               # "long", "short" or "both" (shorts: margin account, borrowable stocks)
     enable_bounce: bool = True
     enable_breakout: bool = True
+    trend_filter: str = "off"             # trade only with the daily trend: "off", "stock" (the stock's own),
+                                          # "market" (trend_market_symbol's) or "both" (both must agree)
+    trend_days: int = 20                  # the trend = last close above (up) / below (down) its average of this many days
+    trend_market_symbol: str = "SPY"      # the market for trend_filter "market" / "both"
     trail_stop: bool = True               # raise the stop below each new confirmed swing low
     breakeven_at_r: float = 1.0           # once price is this many R above entry, stop goes to entry (0 = off)
     trail_buffer_atr: float | None = None # trailing stop sits this far below each swing low (blank = stop_buffer_atr)
@@ -149,6 +153,12 @@ class Config:
         bad = [i for i in (self.watchlist_indexes or []) if i not in INDEXES]
         if bad:
             raise ValueError(f"watchlist_indexes: unknown {', '.join(map(str, bad))} (choose from {', '.join(INDEXES)})")
+        if self.trend_filter in (False, None, ""):     # YAML reads a bare `off` as false
+            self.trend_filter = "off"
+        if str(self.trend_filter) not in ("off", "stock", "market", "both"):
+            raise ValueError(f"trend_filter must be 'off', 'stock', 'market' or 'both', not {self.trend_filter!r}")
+        if not 2 <= int(self.trend_days) <= 250:
+            raise ValueError(f"trend_days must be 2 to 250, not {self.trend_days!r}")
         if self.direction not in ("long", "short", "both"):
             raise ValueError(f"direction must be 'long', 'short' or 'both', not {self.direction!r}")
         if self.bar_minutes not in (1, 2, 3, 5, 10, 15, 30):

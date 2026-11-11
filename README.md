@@ -136,6 +136,23 @@ Because the line always uses the newest swing, it updates through the day as new
 The watched stocks are checked best-ranked first, longs before shorts, and the **first signal is taken**.
 The bot holds **one position at a time**; while it's in a trade it doesn't look for another.
 
+**Trend filter** (`trend_filter`, off by default): trade only in the direction of the daily trend. A stock's
+trend is **up** when yesterday's close is above its average close of the last `trend_days` (20) days, and
+**down** when below; nothing from today counts.
+
+| `trend_filter` | Longs only when... | Shorts only when... |
+|---|---|---|
+| `off` | (every signal is traded) | |
+| `stock` | the stock's trend is up | the stock's trend is down |
+| `market` | the market's trend is up (`trend_market_symbol`, SPY) | the market's trend is down |
+| `both` | both are up | both are down (when they disagree, that stock isn't traded that day) |
+
+With it on, the scan only watches setups that go with the trend, and a signal against it isn't taken (the
+log says "SIGNAL ... not taken: against the trend"). A trend that can't be worked out (a new listing, no
+data) doesn't restrict anything. Futures (NinjaTrader) have no daily history here, so it has no effect there.
+Compare first: `py -m swingbot backtest --days 180 --universe watchlist --try trend_filter=off,stock,market,both`
+(the daily closes come from Alpaca, from far enough back that the first day already has a trend).
+
 ### 5. The stop and the size of the trade
 
 The **initial stop** is the lower of:
@@ -220,6 +237,12 @@ shaken out by ordinary noise far too often. Most other settings made less differ
 stocks happened to be picked, and which weeks were tested. The edge found was small (about +0.1R a trade), so
 run it on a paper account and compare with the backtest (the evening check does this) before risking real
 money. Past results don't guarantee anything.
+
+A later check (November 2026, Dow and Nasdaq-100 stocks, 180 days) with the slippage set to what the paper
+account actually got (`slippage_pct: 0.10` a side, not 0.02) found **no edge**: about −0.4R a trade on
+5-minute bars and −0.25R on 15- and 30-minute bars, losing in most months, with bounces and breakouts alike
+roughly breakeven even before costs. The trend filter is there to test whether trading only with the trend
+changes that.
 
 ## Setup
 

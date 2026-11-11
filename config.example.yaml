@@ -48,6 +48,16 @@ direction: long             # long, short or both. Shorts need a margin account 
                             # stocks that can be borrowed; the same rules apply, mirrored.
 enable_bounce: true
 enable_breakout: true
+# Trade only in the direction of the daily trend: long when it's up, short when it's down. The trend is up
+# when yesterday's close is above its average close of the last trend_days days, down when below.
+#   off     no filter (every signal is traded)
+#   stock   the stock's own trend
+#   market  the market's trend (trend_market_symbol, SPY = the S&P 500)
+#   both    the stock and the market must agree (when they don't, that stock isn't traded that day)
+# Compare them first: py -m swingbot backtest --days 180 --try trend_filter=off,stock,market,both
+trend_filter: off
+trend_days: 20
+trend_market_symbol: SPY
 stop_buffer_atr: 0.25
 min_stop_atr: 0.5
 max_stop_atr: 3.0
