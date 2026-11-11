@@ -271,7 +271,10 @@ usually does by that time of day, the move tends to carry on into the close.
 
 `max_trades_per_day` and `daily_loss_limit_pct` still apply (the study averaged about 2 trades a day, so
 keep `max_trades_per_day` at 4 or more); the trend-line settings (stops, targets, scan, watch list) aren't
-used. Public and Alpaca only (not NinjaTrader). On the dashboard the chart shows the bands and VWAP, the
+used. Public and Alpaca only (not NinjaTrader). It needs `momentum_lookback_days` + 1 earlier days of bars:
+Alpaca has them at once; Public only gives a week of intraday bars at a time, so on Public (and in the
+Docker image) the bot keeps each day's bars in data/momentum/ and starts trading once it has enough, after
+about three weeks of running (the log says how many days it has). On the dashboard the chart shows the bands and VWAP, the
 Stop tile says where the next check would exit, and the log has a line per check:
 `CHECK 10:30 SPY 512.30: band 509.10 - 514.20, VWAP 511.05 -> buy`.
 

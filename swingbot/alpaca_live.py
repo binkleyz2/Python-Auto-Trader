@@ -101,10 +101,10 @@ class AlpacaBot(Bot):
         if self.client.public is not None:
             try:
                 df = Bot.momentum_bars(self, symbol, days)
-                if df is not None and len(set(df.index.date)) >= days:
+                if df is not None and len(df) and len(set(df.index.date)) >= days:
                     return df
             except Exception as e:
-                log.warning("%s history from Public failed (%s) - using Alpaca's", symbol, e)
+                log.debug("%s history from Public failed: %s", symbol, e)
         df = self._one(self._bars_df(symbol, "DAYS", back=int(days * 1.6) + 10), symbol)
         return df[df.index.date < now_et().date()] if len(df) else df
 

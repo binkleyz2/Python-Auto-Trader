@@ -33,7 +33,7 @@ import pandas as pd
 from . import __version__
 from .backtest import position_size
 from .config import Config
-from .data import fetch_public, file_stem, normalize
+from .data import empty_bars, fetch_public, file_stem, normalize
 from .scanner import avg_dollar_volume, one_per_company, scan
 from .strategy import (add_indicators, better_stop, find_swings, mirror, resistance_line, sided_breakeven_stop,
                        sided_trailing_stop, signals_at, support_line, target_for)
@@ -254,26 +254,21 @@ class Bot:
         return self.client
 
     def momentum_bars(self, symbol: str, days: int) -> pd.DataFrame:
-        """Bars from at least ``days`` earlier days for the noise band. From Public: a month (or a quarter)
-        of bars on the check clock, the sizes it offers for that long. Every day's bars are also kept in
-        data/momentum/, so the history builds up even if Public only gives a short stretch."""
+        """Bars from at least ``days`` earlier days for the noise band. Public gives intraday bars for a
+        week at most (a month of them is refused), so every morning's week is kept in data/momentum/ and
+        the history builds up a day at a time; the Alpaca bot uses Alpaca's history when that's short."""
         from .data import PUBLIC_SIZES, fetch_public
-        period = "MONTH" if days <= 18 else "QUARTER"
         every = int(self.cfg.momentum_check_minutes)
         sizes = [m for m in (30, 15, 10, 5) if m in PUBLIC_SIZES and every % m == 0]
         got, problems = None, []
         for m in sizes:
             try:
-                df = fetch_public(self._public_data_client(), symbol, period, m)
+                got = fetch_public(self._public_data_client(), symbol, "WEEK", m)
+                break
             except Exception as e:
                 problems.append(f"{m}-minute bars: {e}")
-                continue
-            if df is not None and len(df) and (got is None or len(set(df.index.date)) > len(set(got.index.date))):
-                got = df
-            if got is not None and len(set(got.index.date)) >= days:
-                break
-        if problems and (got is None or len(set(got.index.date)) < days):
-            log.warning("%s history from Public for the noise band: %s", symbol, "; ".join(problems))
+        if got is None and problems:
+            log.warning("%s bars from Public for the noise band: %s", symbol, "; ".join(problems))
         return self._momentum_cache(symbol, got)
 
     def _momentum_cache(self, symbol: str, df: pd.DataFrame | None) -> pd.DataFrame:
@@ -294,7 +289,7 @@ class Bot:
             old = old[[d not in fresh_days for d in old.index.date]]
         parts = [x for x in (old, fresh) if x is not None and len(x)]
         if not parts:
-            return pd.DataFrame()
+            return empty_bars()
         both = pd.concat(parts).sort_index()
         both = both[~both.index.duplicated(keep="last")]
         try:
@@ -328,8 +323,10 @@ class Bot:
             log.info("Noise band history: %d earlier days of %s bars (%s to %s)", have, sym,
                      self._mom.days[0], self._mom.days[-1])
         if have < n + 1:
-            log.warning("spy_momentum: only %d earlier days of %s bars (needs %d) - no trades today",
-                        have, sym, n + 1, extra={"notify": "alert"})
+            log.warning("spy_momentum: only %d earlier days of %s bars (needs %d) - no trades today. %s",
+                        have, sym, n + 1, "Public gives a week of bars at a time; the bot keeps each day's "
+                        "(data/momentum/), so it has enough after about three weeks of running."
+                        if self.broker_name == "Public" else "", extra={"notify": "alert"})
             self.pick_reason = f"{sym} intraday momentum - not enough history today ({have} of {n + 1} days)"
             return
         vol = self._mom.daily_vol(today, n)

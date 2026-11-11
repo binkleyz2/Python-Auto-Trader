@@ -4,6 +4,13 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.33.3 - 2026-11-11
+
+- spy_momentum history: Public refuses more than a week of intraday bars, so the bot no longer asks it for a
+  month (that only produced warnings before Alpaca's history was used). On the Alpaca bot with Public's
+  price data the history simply comes from Alpaca. On Public alone (and in Docker) the week it gets each
+  morning is kept, and trading starts once there are enough days (about three weeks); the log says so.
+
 ## v1.33.2 - 2026-11-10
 
 - **Fixed: spy_momentum on Alpaca with Public's price data (`price_data: public`) found no history** ("'AlpacaClients'
