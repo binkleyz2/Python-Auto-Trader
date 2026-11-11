@@ -4,6 +4,21 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.33.0 - 2026-11-10
+
+- **New strategy: SPY intraday momentum** (`strategy: spy_momentum`), from Zarattini, Aziz & Barbon (2024).
+  Trades only SPY: in when it leaves its usual range from the open (the "noise band": the average move by
+  that time of day over 14 days, from the higher/lower of the open and yesterday's close), out when it's back
+  inside the band or across VWAP, checked every 30 minutes from 10:00, turned around when it crosses to the
+  other side, closed by `flatten_time`. Sized for 2% daily volatility, at most `momentum_max_leverage` times
+  the account (default 1: no margin). Settings `momentum_*`. Works live (Public and Alpaca) and dry, in the
+  backtest (`py -m swingbot backtest --days 2500` backtests SPY), with `--try`, and in the evening check. The
+  dashboard draws the bands and VWAP and shows where the next check would exit. The trend-line strategy is
+  unchanged and stays the default.
+- Backtest reports add the Sharpe ratio, the yearly return (for a year or more) and results by year; the
+  comparison table has a sharpe column.
+- Dashboard: the "Chart" picker no longer shows (empty) when only one symbol is watched.
+
 ## v1.32.0 - 2026-11-10
 
 - **Trend filter** (`trend_filter`: off, stock, market or both; `trend_days` 20; `trend_market_symbol` SPY):

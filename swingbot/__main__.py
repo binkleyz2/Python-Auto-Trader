@@ -78,7 +78,9 @@ def _data_client():
 
 
 def _symbols(cfg: Config, args, workdir: Path) -> list[str]:
-    """The stocks --symbol / --universe name."""
+    """The stocks --symbol / --universe name (spy_momentum: just its symbol)."""
+    if cfg.strategy == "spy_momentum":
+        return [str(cfg.momentum_symbol).upper()]
     if args.symbol:                                    # --symbol AAPL (or AAPL,MSFT): just those
         syms = [x.strip().upper() for x in args.symbol.split(",") if x.strip()]
     elif args.universe.strip().lower() == "watchlist":
@@ -116,6 +118,15 @@ def _alpaca_history(cfg: Config, args, workdir: Path) -> dict:
     if not hist:
         sys.exit("No history came back from Alpaca.")
     return hist
+
+
+def _run_bt(hist: dict, cfg: Config, **kw):
+    """The backtest for cfg.strategy: the trend-line backtest, or spy_momentum's."""
+    if cfg.strategy == "spy_momentum":
+        from . import momentum
+        return momentum.run(hist, cfg, progress=kw.get("progress"), start=kw.get("start"), end=kw.get("end"))
+    from . import backtest as bt
+    return bt.run(hist, cfg, **kw)
 
 
 def _trend_closes(cfg: Config, args, hist: dict, workdir: Path) -> dict | None:
@@ -364,6 +375,9 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         key = key.strip()
         if not hasattr(cfg, key):
             sys.exit(f"--try: unknown setting {key!r}")
+        if key == "strategy":
+            sys.exit("--try strategy: the strategies trade different things (SPY, or a list of stocks) - backtest "
+                     "each on its own (strategy: in config.yaml)")
         if isinstance(getattr(cfg, key), str):          # times stay text ("12:45" isn't a number); off = ""
             vs = [v.strip().strip("\"'") for v in vals.split(",")]
             timeish = ":" in str(getattr(cfg, key)) or key.endswith("_time")   # times: off = "" (blank)
@@ -423,10 +437,13 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
             bar_hist[bm] = {k: resample_bars(v, bm) for k, v in hist.items()}
         h = bar_hist[bm]
         pk = (bm, c.swing_n, c.atr_period, c.direction != "long")
-        if pk not in prepared:
-            prepared[pk] = bt.prepare(h, c)
-        trades, curve, _ = bt.run(h, c, scan_cache=scan_cache.setdefault(bm, {}), prepared=prepared[pk],
-                                  progress=_progress("days"), forced=forced, start=start, end=end, daily=daily)
+        if c.strategy == "spy_momentum":
+            trades, curve, _ = _run_bt(h, c, progress=_progress("days"), start=start, end=end)
+        else:
+            if pk not in prepared:
+                prepared[pk] = bt.prepare(h, c)
+            trades, curve, _ = bt.run(h, c, scan_cache=scan_cache.setdefault(bm, {}), prepared=prepared[pk],
+                                      progress=_progress("days"), forced=forced, start=start, end=end, daily=daily)
         s = bt.summarize(trades, curve, c)
         checks = _periods(trades, curve)
         if halves is not None:
@@ -443,6 +460,7 @@ def _compare(hist: dict, cfg: Config, tries: list[str], out: Path, forced: list[
         rows.append({"settings": label, "trades": s.get("trades", 0), "win %": s.get("win_rate_pct"),
                      "avg R": s.get("avg_r"), "profit factor": s.get("profit_factor"), "net $": s.get("net_pnl"),
                      "return %": s.get("return_pct"), "max drawdown %": s.get("max_drawdown_pct"),
+                     "sharpe": s.get("sharpe"),
                      "1st half $": checks[0], "2nd half $": checks[1],
                      **({"stocks A $": checks[2], "stocks B $": checks[3]} if len(checks) > 2 else {}),
                      "holds up": f"{sum(x > 0 for x in checks)}/{len(checks)}"})
@@ -674,12 +692,14 @@ def main(argv=None) -> None:
         from .data import load_dir, synthetic
         if args.command == "demo":
             print("Using SYNTHETIC random-walk data. Results only show the code works.\n")
-            hist = {s: synthetic(s, days=40) for s in cfg.watchlist}
+            hist = {s: synthetic(s, days=40) for s in
+                    ([cfg.momentum_symbol] if cfg.strategy == "spy_momentum" else cfg.watchlist)}
         elif args.days:
             _env()
             hist = _alpaca_history(cfg, args, workdir)
         else:
-            hist = load_dir(args.data, [s.upper() for s in cfg.watchlist])
+            hist = load_dir(args.data, [s.upper() for s in
+                                        ([cfg.momentum_symbol] if cfg.strategy == "spy_momentum" else cfg.watchlist)])
             if not hist:
                 sys.exit(f"No CSVs for the watchlist found in {args.data}/ (or use --days 120 for Alpaca's history)")
         if args.steps and not args.tries:
@@ -692,14 +712,15 @@ def main(argv=None) -> None:
                 print(f"Saved as {kept}")
             return
         print(f"Backtesting {len(hist)} stocks...", flush=True)
-        trades, curve, picks = bt.run(hist, cfg, progress=_progress("days"), forced=_forced(args), start=start, end=end,
-                                      daily=daily)
+        trades, curve, picks = _run_bt(hist, cfg, progress=_progress("days"), forced=_forced(args), start=start, end=end,
+                                       daily=daily)
         out = Path(args.out)
         out.mkdir(exist_ok=True)
         trades.to_csv(out / "trades.csv", index=False)
         curve.to_csv(out / "equity.csv")
         (out / "picks.json").write_text(json.dumps(picks, indent=1), encoding="utf-8")
-        title = f"Backtest with your config.yaml settings ({len(hist)} stocks)"
+        title = (f"Backtest: {cfg.momentum_symbol} intraday momentum (strategy: spy_momentum)"
+                 if cfg.strategy == "spy_momentum" else f"Backtest with your config.yaml settings ({len(hist)} stocks)")
         text = bt.report_text(trades, curve, cfg, title)
         (out / "report.txt").write_text(text + "\n", encoding="utf-8")
         from .backtest_xlsx import run_workbook

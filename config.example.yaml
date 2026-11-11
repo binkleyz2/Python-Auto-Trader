@@ -36,6 +36,21 @@ scan_workers: 15
 public_rate_limit: 8         # Public price data: at most 8 requests per second (it refuses bursts)
 bar_minutes: 5               # Public's price data: 5, 10, 15 or 30 (no 1-3 minute history)
 
+# Which strategy to trade:
+#   trendline     swing-point trend lines on the stocks the morning scan picks (everything else in this file)
+#   spy_momentum  SPY only: in when it leaves its usual range from the open, out back inside it or across
+#                 VWAP, checked every 30 minutes; closed by flatten_time. See "SPY intraday momentum" in
+#                 README.md. Backtest it first: py -m swingbot backtest --days 2500
+strategy: trendline
+momentum_symbol: SPY
+momentum_lookback_days: 14     # days for the usual move from the open (the band) and the volatility
+momentum_band_mult: 1.0        # band width, in usual moves
+momentum_check_minutes: 30     # 10:00, 10:30, ... (5, 10, 15, 30 or 60)
+momentum_first_check: "10:00"
+momentum_vwap_stop: true       # exit back inside the band or across VWAP (false: only at the other band)
+momentum_vol_target_pct: 2.0   # size the position for this much daily movement...
+momentum_max_leverage: 1.0     # ...but at most this times the account (1 = no margin; the study used up to 4)
+
 # Swing points: 5 bars on each side, on 5-minute bars
 swing_n: 5
 touch_tolerance_atr: 0.25

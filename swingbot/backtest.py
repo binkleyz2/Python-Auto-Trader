@@ -336,6 +336,12 @@ def summarize(trades: pd.DataFrame, curve: pd.Series, cfg: Config) -> dict:
         "max_drawdown_pct": round(100 * dd, 2),
         "exits": trades.reason.value_counts().to_dict(),
     }
+    daily = curve.pct_change().dropna() if len(curve) > 2 else pd.Series(dtype=float)
+    if len(daily) > 20 and daily.std() > 0:
+        out["sharpe"] = round(float(daily.mean() / daily.std() * np.sqrt(252)), 2)     # yearly, from daily returns
+    years = len(curve) / 252
+    if years >= 1 and curve.iloc[-1] > 0:
+        out["annual_return_pct"] = round(100 * ((curve.iloc[-1] / cfg.starting_equity) ** (1 / years) - 1), 2)
     if "side" in trades and trades.side.nunique() > 1:
         for side, g in trades.groupby("side"):
             out[f"{side}_trades"] = int(len(g))
@@ -362,6 +368,9 @@ def breakdown(trades: pd.DataFrame) -> dict[str, pd.DataFrame]:
     t["month"] = t.date.str[:7]
     out = {}
     groups = [("By setup", "setup"), ("By entry hour", "hour"), ("By exit", "reason"), ("By month", "month")]
+    t["year"] = t.date.str[:4]
+    if t.year.nunique() > 1:
+        groups.append(("By year", "year"))
     if "scan" in t and t.scan.nunique() > 1:
         groups.insert(1, ("By scan (morning picks vs midday rescan)", "scan"))
     for name, col in groups:
@@ -377,7 +386,11 @@ def report_text(trades: pd.DataFrame, curve: pd.Series, cfg: Config, title: str 
         return "\n".join(lines + ["No trades."])
     lines += [f"Days {s['days']}  Trades {s['trades']}  Win rate {s['win_rate_pct']}%  Avg R {s['avg_r']:+.2f}  "
               f"Profit factor {s['profit_factor']}  Net ${s['net_pnl']:,.2f} ({s['return_pct']:+.2f}%)  "
-              f"Max drawdown {s['max_drawdown_pct']:.2f}%"]
+              f"Max drawdown {s['max_drawdown_pct']:.2f}%"
+              + (f"  Sharpe {s['sharpe']:.2f}" if "sharpe" in s else "")
+              + (f"  Yearly {s['annual_return_pct']:+.2f}%" if "annual_return_pct" in s else "")]
+    if cfg.strategy == "spy_momentum":
+        lines.append("(spy_momentum: 1R = 1% of the position; read the $, return, drawdown and Sharpe)")
     for name, df in breakdown(trades).items():
         lines += ["", name, df.to_string()]
     return "\n".join(lines)

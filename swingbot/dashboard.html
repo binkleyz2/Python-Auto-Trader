@@ -174,13 +174,16 @@
         <button id="rescan" hidden type="button" title="Rank the watchlist again using today's prices (only when not in a trade)">Rescan</button>
         <button id="pause" hidden type="button" title="Stop opening new trades today; an open trade is still managed">Pause new trades</button>
         <span class="note" id="tfnote"></span></span>
-      <span><i class="key" style="border-color:var(--support)"></i>Support (rising)</span>
-      <span><i class="key" style="border-color:var(--resist)"></i>Resistance (falling)</span>
+      <span class="lg-lines"><i class="key" style="border-color:var(--support)"></i>Support (rising)</span>
+      <span class="lg-lines"><i class="key" style="border-color:var(--resist)"></i>Resistance (falling)</span>
+      <span class="lg-bands" style="display:none"><i class="key" style="border-color:var(--resist)"></i>Upper band</span>
+      <span class="lg-bands" style="display:none"><i class="key" style="border-color:var(--support)"></i>Lower band</span>
+      <span class="lg-bands" style="display:none"><i class="key dash" style="border-color:var(--entry)"></i>VWAP</span>
       <span><i class="key" style="border-color:var(--entry)"></i>Entry</span>
       <span><i class="key" style="border-color:var(--stop)"></i>Stop</span>
       <span><i class="key dash" style="border-color:var(--muted)"></i>Initial stop</span>
       <span class="spacer"></span>
-      <span class="tf" id="chartpick" hidden>Chart <select id="chartsel" aria-label="Symbol shown on the chart"></select></span>
+      <span class="tf" id="chartpick" style="display:none">Chart <select id="chartsel" aria-label="Symbol shown on the chart"></select></span>
       <span class="tf">Show <select id="days" aria-label="Days shown on the chart">
         <option value="1">Today</option><option value="2">2 days</option><option value="5">5 days</option>
       </select></span>
@@ -279,6 +282,7 @@ function renderTop(s) {
     if ((p.stop - p.init_stop) * side > 0) sub += locked >= 0 ? ` · locks ${signed(locked)}` : ` · moved ${p.stop_steps.length - 1}×`;
     if (s.stop_manual) sub += s.stop_auto ? " · set by you, bot tightening" : " · set by you";
     if (s.stop_pending != null) sub += ` · moving to ${fmt(s.stop_pending)}…`;
+    if (p.exit_level != null) sub = `exits ${side < 0 ? "above" : "below"} ${fmt(p.exit_level)} at the next check · ` + sub;
     setText("t-stop-s", sub);
     const mv = $("mvstop");
     mv.hidden = !(CTRL && !s.final);
@@ -339,6 +343,11 @@ function renderChart(s) {
   const XMIN = -(days - 1) * BARS_PER_DAY, TOTAL = days * BARS_PER_DAY;
   const bars = (s.bars || []).filter(b => b.x >= XMIN);
   const swingsV = (s.swings || []).filter(sw => sw.x >= XMIN);
+  // spy_momentum: the noise band and VWAP (today only)
+  const bandsV = (s.bands || []).filter(b => b.x >= XMIN);
+  const hasBands = !!(s.bands && s.bands.length);         // (display, not hidden: .legend span sets display)
+  document.querySelectorAll(".lg-bands").forEach(e => e.style.display = hasBands ? "" : "none");
+  document.querySelectorAll(".lg-lines").forEach(e => e.style.display = hasBands ? "none" : "");
   const linesV = (s.lines || []).map(L => {             // clip a line that starts before the window
     let [a, b2] = L.pts;
     if (a[0] < XMIN && b2[0] > a[0]) a = [XMIN, a[1] + (b2[1] - a[1]) * (XMIN - a[0]) / (b2[0] - a[0])];
@@ -360,6 +369,7 @@ function renderChart(s) {
   let ys = [];
   bars.forEach(b => ys.push(b.l, b.h));
   linesV.forEach(L => L.pts.forEach(pt => ys.push(pt[1])));
+  bandsV.forEach(b => ys.push(b.up, b.lo, b.vw));
   if (p) ys.push(p.entry, p.stop, p.init_stop);
   trades.forEach(t => ys.push(t.entry, t.exit));
   if (lastPx != null) ys.push(lastPx);
@@ -438,6 +448,20 @@ function renderChart(s) {
     labels.push([y(b2[1]), `${L.kind === "support" ? "Support" : "Resist."} ${fmt(b2[1])}`, c]);
   });
 
+  // noise band and VWAP
+  if (bandsV.length) {
+    const path = key => bandsV.map((b, i) => `${i ? "L" : "M"}${x(b.x).toFixed(1)},${y(b[key]).toFixed(1)}`).join(" ");
+    [["up", "--resist", null], ["lo", "--support", null], ["vw", "--entry", "4 3"]].forEach(([k, c, dash]) => {
+      const a = {d: path(k), fill: "none", stroke: cssVar(c), "stroke-width": 2, "stroke-linejoin": "round"};
+      if (dash) a["stroke-dasharray"] = dash;
+      el("path", a, svg);
+    });
+    const lastB = bandsV[bandsV.length - 1];
+    labels.push([y(lastB.up), `Upper ${fmt(lastB.up)}`, cssVar("--resist")]);
+    labels.push([y(lastB.lo), `Lower ${fmt(lastB.lo)}`, cssVar("--support")]);
+    labels.push([y(lastB.vw), `VWAP ${fmt(lastB.vw)}`, cssVar("--entry")]);
+  }
+
   // closed trades: entry ▲ → exit ●, thin connector
   trades.forEach(t => {
     const c = t.pnl >= 0 ? cssVar("--good") : cssVar("--stop");
@@ -493,6 +517,12 @@ function renderChart(s) {
         addRow(tip, L.kind === "support" ? "Support" : "Resistance", fmt(v), cssVar(L.kind === "support" ? "--support" : "--resist"));
       }
     });
+    const bb = bandsV.filter(z => z.x <= b.x + 1 + 1e-9).pop();
+    if (bb) {
+      addRow(tip, "Upper band", fmt(bb.up), cssVar("--resist"));
+      addRow(tip, "Lower band", fmt(bb.lo), cssVar("--support"));
+      addRow(tip, "VWAP", fmt(bb.vw), cssVar("--entry"));
+    }
     // a closed trade this bar falls in (entry ▲ to exit ●, the dashed line): what it was doing then, and how it ended
     trades.forEach(t => {
       if (b.x < t.entry_x - 1e-9 || b.x > t.exit_x + 1e-9) return;
@@ -698,7 +728,7 @@ let CHART = "";
 try { CHART = localStorage.getItem("swingbot.chart") || ""; } catch (e) {}
 function renderChartPicker(s) {
   const syms = (s.watch || []).map(w => w.symbol), sel = $("chartsel");
-  $("chartpick").hidden = syms.length < 2;
+  $("chartpick").style.display = syms.length < 2 ? "none" : "";     // (.legend span sets display; hidden loses)
   if (syms.length < 2) return;
   if (sel.options.length !== syms.length || [...sel.options].some((o, i) => o.value !== syms[i])) {
     sel.replaceChildren(...syms.map(m => { const o = document.createElement("option"); o.value = m;

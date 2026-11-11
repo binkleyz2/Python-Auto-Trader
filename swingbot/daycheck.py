@@ -37,7 +37,8 @@ def _mins(hhmm: str) -> int:
 
 # how a trade ended, in words both sides use (live "end of day" = backtest "flatten", etc.)
 EXIT_KIND = {"stop": "stop", "trail": "stop", "breakeven": "stop", "target": "target", "flatten": "close",
-             "end of day": "close", "closed by you": "you", "kill switch": "you"}
+             "end of day": "close", "closed by you": "you", "kill switch": "you",
+             "momentum exit": "stop"}
 
 
 def _exit_kind(reason: str) -> str:
@@ -138,8 +139,17 @@ def run(bot, cfg, logs: Path, day: str | None = None, live_trades: list[dict] | 
         d0 = date.fromisoformat(day)
         n_days = len(set().union(*[set(pd.DatetimeIndex(d.index).tz_convert("America/New_York").date
                                        if d.index.tz is not None else d.index.date) for d in hist.values()]))
-        trades, _, _ = bt.run(hist, c, forced=[s for s in watched if s in hist], start=d0, end=d0,
-                              warmup_days=min(3, max(0, n_days - 1)))
+        if c.strategy == "spy_momentum" and getattr(bot, "_mom_hist", None) is not None:
+            from . import momentum
+            from .data import normalize
+            sym = str(c.momentum_symbol).upper()
+            if sym in hist:                             # the earlier days the bot used, plus today's bars
+                today = hist[sym][hist[sym].index.date == d0]
+                hist = {sym: normalize(pd.concat([bot._mom_hist, today]))}
+            trades, _, _ = momentum.run(hist, c, start=d0, end=d0)
+        else:
+            trades, _, _ = bt.run(hist, c, forced=[s for s in watched if s in hist], start=d0, end=d0,
+                                  warmup_days=min(3, max(0, n_days - 1)))
         if len(trades):
             trades = trades[trades["date"].astype(str) == day]
         res = compare(live_trades, trades, c.bar_minutes)

@@ -1,6 +1,7 @@
 """All tunable settings in one place. Edit config.yaml rather than this file."""
 from __future__ import annotations
 
+import re
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -51,6 +52,16 @@ class Config:
 
     # --- Trade management ------------------------------------------------------
     direction: str = "long"               # "long", "short" or "both" (shorts: margin account, borrowable stocks)
+    strategy: str = "trendline"           # "trendline" (swing-point trend lines, the original) or "spy_momentum"
+    # spy_momentum (Zarattini, Aziz & Barbon 2024): trade SPY when it leaves its usual range from the open
+    momentum_symbol: str = "SPY"
+    momentum_lookback_days: int = 14      # days for the usual move from the open (the noise band) and the volatility
+    momentum_band_mult: float = 1.0       # band width: this many times the usual move
+    momentum_check_minutes: int = 30      # check on the clock every this many minutes (10:00, 10:30, ...)
+    momentum_first_check: str = "10:00"
+    momentum_vwap_stop: bool = True       # exit at the band or VWAP, whichever is nearer (off: the other band)
+    momentum_vol_target_pct: float = 2.0  # size the day's position for this daily volatility...
+    momentum_max_leverage: float = 1.0    # ...but never more than this times the account (1 = no margin)
     enable_bounce: bool = True
     enable_breakout: bool = True
     trend_filter: str = "off"             # trade only with the daily trend: "off", "stock" (the stock's own),
@@ -153,6 +164,20 @@ class Config:
         bad = [i for i in (self.watchlist_indexes or []) if i not in INDEXES]
         if bad:
             raise ValueError(f"watchlist_indexes: unknown {', '.join(map(str, bad))} (choose from {', '.join(INDEXES)})")
+        if str(self.strategy) not in ("trendline", "spy_momentum"):
+            raise ValueError(f"strategy must be 'trendline' or 'spy_momentum', not {self.strategy!r}")
+        if not 2 <= int(self.momentum_lookback_days) <= 60:
+            raise ValueError(f"momentum_lookback_days must be 2 to 60, not {self.momentum_lookback_days!r}")
+        if not 0.1 <= float(self.momentum_band_mult) <= 5:
+            raise ValueError(f"momentum_band_mult must be 0.1 to 5, not {self.momentum_band_mult!r}")
+        if int(self.momentum_check_minutes) not in (5, 10, 15, 30, 60):
+            raise ValueError(f"momentum_check_minutes must be 5, 10, 15, 30 or 60, not {self.momentum_check_minutes!r}")
+        if not 0 < float(self.momentum_max_leverage) <= 4:
+            raise ValueError(f"momentum_max_leverage must be more than 0 and at most 4, not {self.momentum_max_leverage!r}")
+        if not 0 < float(self.momentum_vol_target_pct) <= 10:
+            raise ValueError(f"momentum_vol_target_pct must be more than 0 and at most 10, not {self.momentum_vol_target_pct!r}")
+        if not re.fullmatch(r"\d{1,2}:\d{2}", str(self.momentum_first_check)):
+            raise ValueError(f"momentum_first_check must be a time like \"10:00\" (in quotes), not {self.momentum_first_check!r}")
         if self.trend_filter in (False, None, ""):     # YAML reads a bare `off` as false
             self.trend_filter = "off"
         if str(self.trend_filter) not in ("off", "stock", "market", "both"):
@@ -187,6 +212,9 @@ class Config:
             cfg.watchlist = read_watchlist(wf)
         if cfg.broker not in ("public", "alpaca", "ninjatrader"):
             raise ValueError(f"broker must be 'public', 'alpaca' or 'ninjatrader', not {cfg.broker!r}")
+        if cfg.broker == "ninjatrader" and cfg.strategy == "spy_momentum":
+            raise ValueError("strategy spy_momentum trades SPY (a stock ETF) - it needs broker public or alpaca, "
+                             "not ninjatrader")
         if DOCKER and cfg.broker != "public":
             raise ValueError(f"this Docker image trades on Public.com only - set broker: public "
                              f"(not {cfg.broker!r}); Alpaca and NinjaTrader aren't in it")

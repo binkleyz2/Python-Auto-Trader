@@ -92,12 +92,18 @@ class AlpacaBot(Bot):
         from alpaca.data.enums import DataFeed
         return DataFeed.SIP if (sip or self.client.feed == "sip") else DataFeed.IEX
 
-    def _bars_df(self, symbols, period: str) -> pd.DataFrame:
+    def momentum_bars(self, symbol: str, days: int) -> pd.DataFrame:
+        """spy_momentum's history: enough earlier days of bars at the bot's bar size."""
+        if self.client.public is not None:
+            return Bot.momentum_bars(self, symbol, days)
+        return self._one(self._bars_df(symbol, "DAYS", back=int(days * 1.6) + 10), symbol)
+
+    def _bars_df(self, symbols, period: str, back: int | None = None) -> pd.DataFrame:
         from alpaca.data.enums import Adjustment
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
         now = now_et()
-        back = 10 if self.bm >= 5 else 5                  # 1-minute bars: a shorter history is plenty
+        back = back or (10 if self.bm >= 5 else 5)        # 1-minute bars: a shorter history is plenty
         start = (now - timedelta(days=back)) if period != "DAY" else now.replace(hour=4, minute=0, second=0, microsecond=0)
         return self.client.data.get_stock_bars(StockBarsRequest(
             symbol_or_symbols=symbols, timeframe=TimeFrame(self.bm, TimeFrameUnit.Minute),

@@ -2,6 +2,9 @@
 
 A day-trading bot for Public.com or Alpaca (stocks) or NinjaTrader (futures) that you run on your own computer. Each morning it scans your watchlist, picks one stock, and trades it on 5-minute bars: long by default, or also short (`direction`). It uses swing-point trend lines and is always out of the market by the close.
 
+A second strategy, **SPY intraday momentum** (`strategy: spy_momentum`), trades only SPY: see
+[SPY intraday momentum](#spy-intraday-momentum-strategy-spy_momentum).
+
 **You are responsible for every order it sends.** It starts in dry-run mode, which places no orders. Run the backtest and at least a few weeks of dry runs before you use `--live`.
 
 Version history: see [CHANGELOG.md](CHANGELOG.md) and the repository's Releases page. `py -m swingbot --version` shows the installed version.
@@ -243,6 +246,46 @@ account actually got (`slippage_pct: 0.10` a side, not 0.02) found **no edge**: 
 5-minute bars and −0.25R on 15- and 30-minute bars, losing in most months, with bounces and breakouts alike
 roughly breakeven even before costs. The trend filter is there to test whether trading only with the trend
 changes that.
+
+## SPY intraday momentum (`strategy: spy_momentum`)
+
+From Zarattini, Aziz & Barbon (2024), *Beat the Market: An Effective Intraday Momentum Strategy for S&P500
+ETF (SPY)*. The idea: most of the day SPY just wobbles around its open; when it moves further than it
+usually does by that time of day, the move tends to carry on into the close.
+
+1. **The noise band.** For each time of day (10:00, 10:30, ...), the usual move = the average absolute move
+   from the open to that time over the last `momentum_lookback_days` (14) days. Today's band at that time:
+   upper = the higher of today's open and yesterday's close × (1 + usual move); lower = the lower of the two
+   × (1 − usual move).
+2. **Checks every 30 minutes** (`momentum_check_minutes`), on the clock, from `momentum_first_check` (10:00)
+   - not in between:
+   - flat and SPY above the upper band: **buy**; below the lower band: **sell short** (`direction: both`)
+   - long and SPY below the higher of the upper band and VWAP: **sell**; short and above the lower of the
+     lower band and VWAP: **buy back** (`momentum_vwap_stop: false`: only at the other band)
+   - past the other band too: out and **turned around** the other way
+3. **Out by `flatten_time`** (15:50), every day. No new trades after `last_entry_time`.
+4. **Size:** the same shares all day, set at the first trade: the account × `momentum_vol_target_pct` (2%)
+   ÷ SPY's daily volatility over the lookback, at most `momentum_max_leverage` × the account (1 = no margin;
+   the study allowed 4, which only a margin account can do). A broker stop at the other band protects the
+   position between checks.
+
+`max_trades_per_day` and `daily_loss_limit_pct` still apply (the study averaged about 2 trades a day, so
+keep `max_trades_per_day` at 4 or more); the trend-line settings (stops, targets, scan, watch list) aren't
+used. Public and Alpaca only (not NinjaTrader). On the dashboard the chart shows the bands and VWAP, the
+Stop tile says where the next check would exit, and the log has a line per check:
+`CHECK 10:30 SPY 512.30: band 509.10 - 514.20, VWAP 511.05 -> buy`.
+
+**Backtest it over years, not months** - one trade a day needs a long history to say anything:
+
+    py -m swingbot backtest --days 2500                         (about 9 years of SPY, from Alpaca)
+    py -m swingbot backtest --days 2500 --try slippage_pct=0.01,0.02,0.05
+    py -m swingbot backtest --days 2500 --try momentum_band_mult=0.8,1,1.2 --try momentum_max_leverage=1,2
+
+(`--universe` isn't needed: it backtests `momentum_symbol`.) SPY is the most traded stock there is, so its
+real costs are far below the 0.10% the trend-line stocks cost on paper: 0.01-0.02% a side is realistic. The
+report adds the Sharpe ratio and a yearly breakdown; 1R in it = 1% of the position. The study reported
+about 19.6% a year with a Sharpe of 1.33 from 2007 to early 2024 at up to 4x leverage, before taxes; that
+was found on the past, and nothing guarantees it continues. Paper-trade it first.
 
 ## Setup
 

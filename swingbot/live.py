@@ -178,6 +178,8 @@ class Bot:
             if self.pending_bm:
                 self.bm, self.pending_bm = self.pending_bm, None
         today = now_et().date()
+        if self.momentum:
+            return self._momentum_morning(today)
         if self.forced_symbol:                         # `run --symbol X`: you picked it - no scan
             sym = self.forced_symbol
             df = self.fetch_bars(sym, "WEEK")
@@ -241,6 +243,118 @@ class Bot:
         return syms
 
     tradable_note = "at Public"
+
+    # ------------------------------------------------- strategy: spy_momentum (see momentum.py)
+    @property
+    def momentum(self) -> bool:
+        return self.cfg.strategy == "spy_momentum"
+
+    def momentum_bars(self, symbol: str, days: int) -> pd.DataFrame:
+        """Bars from enough earlier days for the noise band (Public: a month or a quarter of bars on the
+        check clock - the sizes it offers for that long)."""
+        from .data import PUBLIC_SIZES, fetch_public
+        period = "MONTH" if days <= 18 else "QUARTER"
+        every = int(self.cfg.momentum_check_minutes)
+        sizes = [m for m in (30, 15, 10, 5) if m in PUBLIC_SIZES and every % m == 0]
+        last = None
+        for m in sizes:
+            try:
+                df = fetch_public(self.client, symbol, period, m)
+                if df is not None and len(set(df.index.date)) >= days:
+                    return df
+            except Exception as e:
+                last = e
+        if last:
+            log.warning("%s history for the noise band: %s", symbol, last)
+        return fetch_public(self.client, symbol, period, sizes[-1]) if sizes else pd.DataFrame()
+
+    def _momentum_morning(self, today) -> None:
+        from . import momentum as mm
+        cfg = self.cfg
+        sym = str(cfg.momentum_symbol).upper()
+        n = int(cfg.momentum_lookback_days)
+        df = self.fetch_bars(sym, "WEEK")                      # the chart's earlier days
+        self.watch = [sym]
+        self.watched_today = list(dict.fromkeys(self.watched_today + self.watch))
+        self.histories = {sym: df[df.index.date < today] if not df.empty else df}
+        self.scan_results = []
+        self._activate(sym)
+        self._mom, self._mom_bands, self._mom_shares = None, [], None
+        try:
+            h = self.momentum_bars(sym, n + 2)
+            h = h[h.index.date < today] if h is not None and len(h) else h
+            self._mom_hist = h
+            self._mom = mm.Days(h) if h is not None and len(h) else None
+        except Exception as e:
+            log.warning("%s history for the noise band failed: %s", sym, e, extra={"notify": "alert"})
+        have = len(self._mom.days) if self._mom else 0
+        if have < n + 1:
+            log.warning("spy_momentum: only %d earlier days of %s bars (needs %d) - no trades today",
+                        have, sym, n + 1, extra={"notify": "alert"})
+            self.pick_reason = f"{sym} intraday momentum - not enough history today ({have} of {n + 1} days)"
+            return
+        vol = self._mom.daily_vol(today, n)
+        lev = mm.leverage(self._mom, today, cfg)
+        self.pick_reason = (f"{sym} intraday momentum: checks every {cfg.momentum_check_minutes} min from "
+                            f"{cfg.momentum_first_check}; {lev:.2f}x the account"
+                            + (f" (daily volatility {vol * 100:.2f}%)" if vol else ""))
+        log.info("TODAY: %s", self.pick_reason)
+
+    def _momentum_step(self, newest, tb) -> None:
+        """At each bar: update the bands on the chart; at each check time, exit / enter / turn around."""
+        from . import momentum as mm
+        cfg, sym = self.cfg, self.symbol
+        if tb is None or not len(tb) or getattr(self, "_mom", None) is None:
+            return
+        today = newest.date()
+        g = tb[tb.index.date == today]
+        if not len(g):
+            return
+        b = mm.bands(self._mom, today, cfg, day_open=float(g["open"].iat[0]))
+        vw = mm.vwap(g)
+        ends = [(ts + timedelta(minutes=self.bm)).strftime("%H:%M") for ts in g.index]
+        if b is not None:
+            self._mom_bands = [dict(x=self._x(ts) + 1, t=e, up=round(float(b.at[e, "upper"]), 4),
+                                    lo=round(float(b.at[e, "lower"]), 4), vw=round(float(v), 4))
+                               for ts, e, v in zip(g.index, ends, vw) if e in b.index and b.at[e, "upper"] == b.at[e, "upper"]]
+            if sym in self.views:
+                self.views[sym]["bands"] = self._mom_bands
+                self.view = self.views[sym]
+        end_s, price, v = ends[-1], float(g["close"].iat[-1]), float(vw[-1])
+        if b is None or end_s not in b.index:
+            return
+        up, lo = float(b.at[end_s, "upper"]), float(b.at[end_s, "lower"])
+        self.watch_info[sym] = dict(last=price, note=f"band {lo:.2f} - {up:.2f}, VWAP {v:.2f}")
+        side = self.pos.get("side", 1) if self.pos else 0
+        if self.pos:
+            self.pos["exit_level"] = round(mm.stop_level(side, up, lo, v, cfg), 4)
+        if not mm.is_check(end_s, cfg):
+            return
+        loss_limit = (self.start_equity or cfg.starting_equity) * cfg.daily_loss_limit_pct / 100
+        if self.day_pnl() <= -loss_limit and not self.halted:
+            log.warning("Daily loss limit reached (%.2f). No more entries today.", self.day_pnl())
+            self.halted = True
+        can_enter = (not self.halted and not self.paused and self.trades_today < cfg.max_trades_per_day
+                     and _t(end_s) <= _t(cfg.last_entry_time))
+        exit_now, enter = mm.decide(side, price, up, lo, v, cfg, can_enter)
+        action = ("turn around" if exit_now and enter else "exit" if exit_now else
+                  ("buy" if enter > 0 else "sell short") if enter else "hold" if side else "no trade")
+        log.info("CHECK %s %s %.2f: band %.2f - %.2f, VWAP %.2f -> %s", end_s, sym, price, lo, up, v, action)
+        if exit_now and self.pos:
+            self.flatten("momentum exit")
+            if self.pos:                                   # still holding: don't open the other way
+                return
+        if enter:
+            if self._mom_shares is None:
+                eq = self.start_equity or cfg.starting_equity
+                self._mom_shares = mm.shares_for(eq, self._mom, today, cfg, day_open=float(g["open"].iat[0]))
+                log.info("Position size today: %d %s (%.2fx the account)", self._mom_shares, sym,
+                         mm.leverage(self._mom, today, cfg))
+            stop = lo if enter > 0 else up                 # safety stop at the broker: the other band
+            self.enter(price, stop, "momentum" if enter > 0 else "short momentum", signal_ts=newest, side=enter,
+                       shares=self._mom_shares)
+            if self.pos:
+                self.pos["exit_level"] = round(mm.stop_level(enter, up, lo, v, cfg), 4)
 
     # ------------------------------------------------- the daily trend filter (trend_filter)
     def day_trend(self):
@@ -468,6 +582,25 @@ class Bot:
             profit.append(dict(label="With no target", text=f"winners run until the {'trailing ' if c.trail_stop else ''}"
                                                             f"stop or {c.flatten_time}"))
         trail_off = {} if c.trail_stop else dict(off=True, note="not used - trail_stop is off in config.yaml")
+        if self.momentum:
+            return [
+                dict(group="Strategy", items=[
+                    dict(label="Strategy", text=f"{c.momentum_symbol} intraday momentum (spy_momentum)"),
+                    dict(label="Noise band", text=f"{c.momentum_band_mult:g}x the average move from the open over "
+                                                  f"{c.momentum_lookback_days} days"),
+                    dict(label="Checks", text=f"every {c.momentum_check_minutes} min from {c.momentum_first_check}; "
+                                              f"new trades until {c.last_entry_time}"),
+                    dict(label="Exit", text="back inside the band or across VWAP" if c.momentum_vwap_stop
+                         else "at the other band"),
+                    dict(label="Size", text=f"for {c.momentum_vol_target_pct:g}% daily volatility, at most "
+                                            f"{c.momentum_max_leverage:g}x the account"),
+                    dict(label="Direction", text=direction)]),
+                dict(group="Limits", items=[
+                    dict(label="Daily loss limit", text=f"{c.daily_loss_limit_pct:g}% (no new entries after)"),
+                    dict(label="Trades per day", text=f"{c.max_trades_per_day}"),
+                    dict(label="Sell everything", text=f"{c.flatten_time} ET"),
+                    dict(label="Cash", text=cash)]),
+            ]
         return [
             dict(group="Risk and limits", items=[
                 dict(label="Risk per trade", text=f"{c.risk_per_trade_pct:g}% of the account"),
@@ -556,6 +689,8 @@ class Bot:
             self._close_pos(self.last_price, "closed by you")
 
     def check_midday_rescan(self, now: datetime | None = None) -> None:
+        if self.momentum:
+            return                                     # one symbol all day: nothing to rescan
         """Automatic rescan at midday_rescan_time. In a trade it waits until the trade closes, and is
         dropped if that is not before midday_rescan_by. Runs at most once a day."""
         c = self.cfg
@@ -1197,7 +1332,7 @@ class Bot:
         return None
 
     def enter(self, entry_ref: float, stop: float, kind: str, signal_ts=None, side: int = 1,
-              line: dict | None = None) -> None:
+              line: dict | None = None, shares: int | None = None) -> None:
         cfg = self.cfg
         if side < 0:
             why = self._why_no_short(0)
@@ -1205,7 +1340,7 @@ class Bot:
                 log.info("Signal %s on %s skipped: %s", kind, self.symbol, why)
                 return
         equity = self.account_equity() if self.live else cfg.starting_equity + self.paper_pnl
-        shares = self.size_position(equity, entry_ref, stop, side)
+        shares = self.size_position(equity, entry_ref, stop, side) if shares is None else int(shares)
         if self.live and shares >= 1:
             shares = self._cap_shares(shares, entry_ref, side)
         if shares < 1:
@@ -1214,7 +1349,7 @@ class Bot:
         # stops are rounded away from the price, targets toward it... from the far side
         stop_d = self._round_price(stop, ROUND_DOWN if side > 0 else ROUND_UP)
         tgt_d = (self._round_price(target_for(entry_ref, stop, cfg), ROUND_UP if side > 0 else ROUND_DOWN)
-                 if cfg.use_target else None)
+                 if cfg.use_target and not self.momentum else None)    # spy_momentum: no target
         if self.live:
             if side < 0:
                 why = self._why_no_short(shares)
@@ -1687,6 +1822,13 @@ class Bot:
         elif self.pos and mine is not None:
             self._paper_check(mine.iloc[-1])
 
+        if self.momentum:
+            if self.pos:
+                self.ensure_stop()
+                self.sync_stop_from_broker()
+            self._momentum_step(newest, todays.get(self.symbol))
+            return
+
         # 2) manage an open position: keep a stop in place and trail it up
         if self.pos:
             self.ensure_stop()
@@ -1808,20 +1950,24 @@ class Bot:
         days = [dict(x=-b * per_day, label=f"{day:%a} {day.month}/{day.day}", back=b)
                 for day, b in back.items()]
         lines = []
-        for kind, line in (("support", support_line(d, t, cfg, lo) if cfg.enable_bounce else None),
-                           ("resistance", resistance_line(d, t, cfg, hi) if cfg.enable_breakout else None)):
+        for kind, line in ((("support", support_line(d, t, cfg, lo) if cfg.enable_bounce else None),
+                            ("resistance", resistance_line(d, t, cfg, hi) if cfg.enable_breakout else None))
+                           if not self.momentum else ()):
             if line is None:
                 continue
             a = max(line.i1, i0)
             lines.append(dict(kind=kind, pts=[[xi(a), line.value_at(a)], [xi(t), line.value_at(t)]],
                               anchors=[[xi(line.i1), line.p1], [xi(line.i2), line.p2]]))
         swings = []
-        for i in range(i0, max(i0, t - cfg.swing_n + 1)):
+        for i in range(i0, max(i0, t - cfg.swing_n + 1) if not self.momentum else i0):
             if lo[i]:
                 swings.append(dict(x=xi(i), y=float(d["low"].iat[i]), kind="low"))
             if hi[i]:
                 swings.append(dict(x=xi(i), y=float(d["high"].iat[i]), kind="high"))
-        return dict(bars=bars, lines=lines, swings=swings, days=days)
+        out = dict(bars=bars, lines=lines, swings=swings, days=days)
+        if self.momentum and getattr(self, "_mom_bands", None):
+            out["bands"] = self._mom_bands
+        return out
 
     def refresh_quote(self) -> None:
         """Latest trade price between bars (display only)."""
@@ -1845,6 +1991,7 @@ class Bot:
             unreal = (last - p["entry"]) * p["shares"] * self.point_value * side if last is not None else 0.0
             risk = abs(p["entry"] - p["init_stop"]) * p["shares"] * self.point_value
             pos = dict(kind=p["kind"], side=side, shares=p["shares"], entry=p["entry"], stop=p["stop"], init_stop=p["init_stop"],
+                       exit_level=p.get("exit_level"),
                        entry_x=p["entry_x"], entry_time=p["entry_clock"], stop_steps=p["stop_steps"],
                        unreal=unreal, risk_dollars=risk, r=(unreal / risk) if risk else None)
         spendable = None
