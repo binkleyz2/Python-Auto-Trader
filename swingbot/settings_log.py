@@ -44,7 +44,7 @@ def record(bot, cfg, logs: Path) -> Path | None:
             today_only["bar_minutes"] = int(bot.bm)
         if getattr(bot, "forced_symbol", None):
             today_only["symbol"] = bot.forced_symbol
-        rec = dict(date=str(now_et().date()), account=account_label(cfg), live=bool(bot.live),
+        rec = dict(date=str(getattr(bot, "day", None) or now_et().date()), account=account_label(cfg), live=bool(bot.live),
                    settings=trading_settings(base), today_only=today_only)
         path = logs / FILE
         lines = []

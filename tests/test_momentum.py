@@ -219,3 +219,79 @@ def test_live_spy_momentum_with_no_history_doesnt_trade(tmp_path, monkeypatch, c
     client.now = now
     bot.morning_scan()
     assert "not enough history" in bot.pick_reason and bot._mom is not None and len(bot._mom.days) < 15
+
+
+def test_a_session_that_runs_past_midnight_keeps_its_day(tmp_path, monkeypatch, caplog):
+    """Nov 10 -> 11: a run that finished after midnight saved Nov 10's 7 trades as Nov 11's, and the next
+    morning the bot believed it had already used up the day's trades."""
+    import json
+    caplog.set_level(logging.INFO)
+    cfg = Config(strategy="spy_momentum", direction="both", max_trades_per_day=6)
+    df = synthetic("SPY", days=40, seed=5)
+    days = sorted(set(df.index.date))
+    d1, d2 = days[-2], days[-1]
+    client = FakeClient(df)
+    clock = {"t": datetime(d1.year, d1.month, d1.day, 23, 59, tzinfo=ET)}
+    monkeypatch.setattr(live, "now_et", lambda: clock["t"])
+    client.now = clock["t"]
+    bot = live.Bot(client, cfg, live=False, workdir=tmp_path)
+    (tmp_path / "logs").mkdir()
+    bot.prepare()
+    bot.trades_today = 7
+    bot.last_bar_seen = pd.Timestamp(f"{d1} 15:45", tz=ET)
+    clock["t"] = datetime(d2.year, d2.month, d2.day, 0, 0, 15, tzinfo=ET)    # the save lands after midnight
+    bot.save_state()
+    assert (tmp_path / "logs" / f"{d1}-state.json").exists() and not (tmp_path / "logs" / f"{d2}-state.json").exists()
+    # and a bad file from the old bug (yesterday's session saved under today's date) is ignored
+    bad = json.loads((tmp_path / "logs" / f"{d1}-state.json").read_text())
+    bad["date"] = str(d2)
+    (tmp_path / "logs" / f"{d2}-state.json").write_text(json.dumps(bad))
+    clock["t"] = datetime(d2.year, d2.month, d2.day, 9, 0, tzinfo=ET)
+    client.now = clock["t"]
+    bot2 = live.Bot(client, cfg, live=False, workdir=tmp_path)
+    bot2.prepare()
+    assert bot2.trades_today == 0 and bot2.day == d2
+    assert "it holds the session of" in caplog.text
+
+
+def test_a_blocked_check_says_why(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    cfg = Config(strategy="spy_momentum", direction="both", max_trades_per_day=1)
+    df = synthetic("SPY", days=40, seed=5)
+    client = FakeClient(df)
+    for day in sorted(set(df.index.date))[-6:]:
+        wd = tmp_path / str(day)
+        wd.mkdir()
+        bot = live.Bot(client, cfg, live=False, workdir=wd)
+        clock = {"t": datetime(day.year, day.month, day.day, 9, 0, tzinfo=ET)}
+        monkeypatch.setattr(live, "now_et", lambda: clock["t"])
+        client.now = clock["t"]
+        bot.morning_scan()
+        bot.trades_today = 1                                    # the day's one trade is used up
+        t = datetime(day.year, day.month, day.day, 9, 36, tzinfo=ET)
+        while t.time() < live._t(cfg.flatten_time):
+            clock["t"] = client.now = t
+            bot.step()
+            t += pd.Timedelta(minutes=5)
+        assert not bot.closed
+    blocked = [r.message for r in caplog.records if "band, but 1 of 1 trades today already" in r.message]
+    assert blocked
+
+
+def test_os_error_text_and_replace_retry(tmp_path, monkeypatch):
+    e = PermissionError(5, "Access is denied", "C:\\Users\\z\\logs\\x.tmp", None, "C:\\Users\\z\\logs\\x.json")
+    assert live.os_error_text(e) == "Access is denied: C:\\Users\\z\\logs\\x.tmp -> C:\\Users\\z\\logs\\x.json"
+    assert "\\\\" not in live.os_error_text(e)
+    a, b = tmp_path / "a.tmp", tmp_path / "b.json"
+    a.write_text("new")
+    real, calls = live.os.replace, []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(5, "Access is denied")       # OneDrive holds it for a moment
+        real(src, dst)
+    monkeypatch.setattr(live.os, "replace", flaky)
+    monkeypatch.setattr(live._time, "sleep", lambda s: None)
+    live.replace_file(a, b)
+    assert b.read_text() == "new" and len(calls) == 3

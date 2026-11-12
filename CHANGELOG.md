@@ -4,6 +4,19 @@ Newest first. Each version is also a tagged release on GitHub. The running bot s
 first line of the log ("swingbot v1.13.0 | Mode: ...") and next to the symbol on the dashboard;
 `py -m swingbot --version` prints it too.
 
+## v1.33.4 - 2026-11-11
+
+- **Fixed: a session that ran on past midnight saved its day under the next day's date.** A run started at
+  23:59 on Nov 10 finished after midnight and saved Nov 10's 7 trades as Nov 11's; on Nov 11 the bot then
+  believed it had used up the day's trades (`max_trades_per_day`) and took none. Every file of a session -
+  the saved state, the day's results row, report, evening check, settings record and dashboard snapshot -
+  now keeps the day the session started on. A saved state that holds another day's session is ignored, with
+  a warning.
+- A check that would have traded but couldn't now says why: `-> no trade (above the band, but 6 of 6 trades
+  today already)`, or the loss limit, a pause, or the last entry time.
+- Saving the day's state retries for a moment when OneDrive briefly holds the file ("Access is denied"), and
+  such errors show paths with single backslashes.
+
 ## v1.33.3 - 2026-11-11
 
 - spy_momentum history: Public refuses more than a week of intraday bars, so the bot no longer asks it for a

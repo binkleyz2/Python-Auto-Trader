@@ -88,6 +88,28 @@ def now_et() -> datetime:
     return datetime.now(ET)
 
 
+def os_error_text(e: BaseException) -> str:
+    """An OSError as people read it: 'Access is denied: C:\\...\\x.tmp -> ...\\x.json', with single
+    backslashes (Python's own text shows the paths quoted, with every backslash doubled)."""
+    if isinstance(e, OSError) and e.strerror:
+        names = " -> ".join(str(x) for x in (e.filename, e.filename2) if x)
+        return f"{e.strerror}: {names}" if names else e.strerror
+    return str(e)
+
+
+def replace_file(tmp: Path, path: Path, tries: int = 8) -> None:
+    """os.replace, retried for a moment: OneDrive (or a virus scanner) can hold the file just as the bot
+    swaps it in, which Windows reports as access denied."""
+    for i in range(tries):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            _time.sleep(0.25 * (i + 1))
+
+
 def x_of(ts, minutes: int = 5) -> float:
     """Position of a time on today's chart, in bars of ``minutes`` since 09:30 ET."""
     ts = pd.Timestamp(ts).tz_convert(ET) if pd.Timestamp(ts).tzinfo else pd.Timestamp(ts).tz_localize(ET)
@@ -158,6 +180,9 @@ class Bot:
         self.last_price_time: str | None = None
         self.final = False
         self.prepared = False                          # account checks + morning scan done
+        self.day = now_et().date()                     # the trading day this session belongs to (set again
+                                                       # in prepare): its files keep that date even if the
+                                                       # session runs on past midnight
         self.point_value = 1.0                         # $ per 1.00 price move per unit (futures: contract multiplier)
         # --- bar size changes asked for from the dashboard (applied by the main loop, never mid-step)
         self._bm_lock = threading.Lock()
@@ -375,6 +400,11 @@ class Bot:
         exit_now, enter = mm.decide(side, price, up, lo, v, cfg, can_enter)
         action = ("turn around" if exit_now and enter else "exit" if exit_now else
                   ("buy" if enter > 0 else "sell short") if enter else "hold" if side else "no trade")
+        if not can_enter and (price > up or price < lo) and not (side and not exit_now):
+            why = ("the daily loss limit was reached" if self.halted else "new trades are paused" if self.paused
+                   else f"{self.trades_today} of {cfg.max_trades_per_day} trades today already"
+                   if self.trades_today >= cfg.max_trades_per_day else f"after the last entry time {cfg.last_entry_time}")
+            action += f" ({'above' if price > up else 'below'} the band, but {why})"
         log.info("CHECK %s %s %.2f: band %.2f - %.2f, VWAP %.2f -> %s", end_s, sym, price, lo, up, v, action)
         if exit_now and self.pos:
             self.flatten("momentum exit")
@@ -901,7 +931,7 @@ class Bot:
     # day carries on: same trade count, loss-limit baseline and settled cash, and any open
     # position is taken over again (its stop keeps trailing, it is sold at 15:50).
     def _state_path(self) -> Path:
-        return self.workdir / "logs" / f"{now_et().date()}-state.json"
+        return self.workdir / "logs" / f"{self.day}-state.json"
 
     def _extra_state(self) -> dict:
         return {}                                      # broker-specific bits (NinjaTrader: order details)
@@ -918,7 +948,7 @@ class Bot:
                 for k in ("signal_ts", "entry_time"):
                     if p.get(k) is not None:
                         p[k] = pd.Timestamp(p[k]).isoformat()
-            st = dict(version=1, date=str(now_et().date()), broker=self.broker_name, live=self.live,
+            st = dict(version=1, date=str(self.day), broker=self.broker_name, live=self.live,
                       bar_minutes=self.bm, symbol=self.symbol, start_equity=self.start_equity,
                       settled_start=self.settled_start, spent_today=self.spent_today,
                       trades_today=self.trades_today, halted=self.halted, paper_pnl=self.paper_pnl,
@@ -931,9 +961,9 @@ class Bot:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(st, indent=1, default=str), encoding="utf-8")
-            os.replace(tmp, path)                      # all or nothing, even if the PC dies mid-write
+            replace_file(tmp, path)                    # all or nothing, even if the PC dies mid-write
         except Exception as e:
-            log.warning("could not save the day's state: %s", e)
+            log.warning("could not save the day's state: %s", os_error_text(e))
 
     def load_state(self) -> dict | None:
         path = self._state_path()
@@ -944,7 +974,11 @@ class Bot:
         except Exception as e:
             log.warning("ignoring unreadable %s (%s)", path.name, e)
             return None
-        if st.get("date") != str(now_et().date()):
+        if st.get("date") != str(self.day):
+            return None
+        seen = str(st.get("last_bar_seen") or "")[:10]
+        if seen and seen != str(self.day):              # written by a session from another day (an old bug)
+            log.warning("Ignoring %s: it holds the session of %s, not today's", path.name, seen)
             return None
         if st.get("broker") != self.broker_name or bool(st.get("live")) != self.live:
             log.info("Saved session in %s is from a %s %s run - not resuming it in this %s %s run.",
@@ -956,7 +990,7 @@ class Bot:
     def _check_leftover(self) -> None:
         """Warn loudly if a position from an earlier day (the bot failed to sell it) is still open.
         The bot won't trade it: shares it didn't buy today count as yours."""
-        today = str(now_et().date())
+        today = str(self.day)
         files = sorted((self.workdir / "logs").glob("*-state.json"), reverse=True)
         for f in files:
             if f.name[:10] >= today:
@@ -2131,6 +2165,7 @@ class Bot:
         """Account checks and the morning scan. Uses data up to yesterday's close only, so it can
         run before the open: start the bot early and the pick is ready when trading starts."""
         cfg = self.cfg
+        self.day = now_et().date()
         st = self.load_state()                     # earlier run today? carry on from it
         self.start_equity = self.account_equity() if self.live else cfg.starting_equity
         if self.live:

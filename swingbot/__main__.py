@@ -805,7 +805,7 @@ def main(argv=None) -> None:
                 record_session(bot, cfg, workdir / "logs")
             if dash:
                 from datetime import date
-                snap = dash.snapshot(workdir / "logs" / f"{date.today()}-dashboard.html")
+                snap = dash.snapshot(workdir / "logs" / f"{getattr(bot, 'day', None) or date.today()}-dashboard.html")
                 logging.getLogger("swingbot").info("Dashboard snapshot saved: %s", snap)
                 if cfg.dashboard_jpg:
                     from .screenshot import save_jpg

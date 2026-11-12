@@ -118,7 +118,7 @@ def run(bot, cfg, logs: Path, day: str | None = None, live_trades: list[dict] | 
     try:
         from . import backtest as bt
         from .live import now_et
-        day = day or str(now_et().date())
+        day = day or str(getattr(bot, "day", None) or now_et().date())
         live_trades = list(bot.closed) if live_trades is None else live_trades
         watched = list(dict.fromkeys(watched if watched is not None else (getattr(bot, "watched_today", None)
                                                                           or getattr(bot, "watch", None) or [])))

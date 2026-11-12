@@ -357,7 +357,7 @@ def end_of_day(bot, cfg, logs: Path) -> Path | None:
         if not (bot.prepared and (bot.last_bar_seen is not None or bot.trades_today)):
             return None                                       # never got to the open (weekend, holiday, error)
         from .live import now_et
-        day = str(now_et().date())
+        day = str(getattr(bot, "day", None) or now_et().date())   # the session's day, even after midnight
         bot.save_state()
 
         def bars_for(sym):

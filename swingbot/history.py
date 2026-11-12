@@ -396,7 +396,7 @@ def record_session(bot, cfg, logs: Path) -> Path | None:
     if getattr(bot, "not_flat", None):
         note = f"{bot.not_flat['shares']} {bot.not_flat['symbol']} still held at the close"
     from .live import now_et
-    day = Day(str(now_et().date()), account_label(cfg),
+    day = Day(str(getattr(bot, "day", None) or now_et().date()), account_label(cfg),
               round(float(bot.start_equity), 2), round(end, 2), pnl, n, w, l, note)
     return update(logs, cfg, day)
 
